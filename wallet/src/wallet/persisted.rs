@@ -6,10 +6,13 @@ use core::{
     pin::Pin,
 };
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::ToString};
 use chain::Merge;
 
-use crate::{descriptor::DescriptorError, ChangeSet, CreateParams, LoadParams, Wallet};
+use crate::{
+    descriptor::{calc_checksum, DescriptorError},
+    ChangeSet, CreateParams, LoadParams, Wallet,
+};
 
 /// Trait that persists [`PersistedWallet`].
 ///
@@ -361,16 +364,63 @@ pub enum CreateWithPersistError<E> {
 impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Persist(err) => fmt::Display::fmt(err, f),
-            Self::DataAlreadyExists(changeset) => write!(
-                f,
-                "Cannot create wallet in persister which already contains wallet data: {:?}",
-                changeset
-            ),
-            Self::Descriptor(err) => fmt::Display::fmt(&err, f),
+            Self::Persist(err) => write!(f, "{}", err),
+            Self::DataAlreadyExists(changeset) => {
+                write!(
+                    f,
+                    "Cannot create wallet in a persister which already contains data: "
+                )?;
+                changeset_info(f, changeset)
+            }
+            Self::Descriptor(err) => {
+                write!(f, "{err}")
+            }
         }
     }
 }
 
 #[cfg(feature = "std")]
 impl<E: fmt::Debug + fmt::Display> std::error::Error for CreateWithPersistError<E> {}
+
+/// Helper function to display basic information about a [`ChangeSet`].
+fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Result {
+    let network = changeset
+        .network
+        .as_ref()
+        .map_or("None".to_string(), |n| n.to_string());
+
+    let descriptor_checksum = changeset
+        .descriptor
+        .as_ref()
+        .and_then(|d| calc_checksum(&d.to_string()).ok())
+        .unwrap_or_else(|| "None".to_string());
+
+    let change_descriptor_checksum = changeset
+        .change_descriptor
+        .as_ref()
+        .and_then(|d| calc_checksum(&d.to_string()).ok())
+        .unwrap_or_else(|| "None".to_string());
+
+    let tx_count = changeset.tx_graph.txs.len();
+
+    let anchor_count = changeset.tx_graph.anchors.len();
+
+    let block_count = if let Some(&count) = changeset.local_chain.blocks.keys().last() {
+        count
+    } else {
+        0
+    };
+
+    writeln!(f, "  Network: {}", network)?;
+    writeln!(f, "  Descriptor Checksum: {}", descriptor_checksum)?;
+    writeln!(
+        f,
+        "  Change Descriptor Checksum: {}",
+        change_descriptor_checksum
+    )?;
+    writeln!(f, "  Transaction Count: {}", tx_count)?;
+    writeln!(f, "  Anchor Count: {}", anchor_count)?;
+    writeln!(f, "  Block Count: {}", block_count)?;
+
+    Ok(())
+}
