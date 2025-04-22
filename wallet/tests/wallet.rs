@@ -1169,6 +1169,17 @@ fn test_create_tx_default_sighash() {
 }
 
 #[test]
+fn test_legacy_create_tx_default_sighash() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(30_000));
+    let psbt = builder.finish().unwrap();
+
+    assert_eq!(psbt.inputs[0].sighash_type, None);
+}
+
+#[test]
 fn test_create_tx_custom_sighash() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = wallet.next_unused_address(KeychainKind::External);
