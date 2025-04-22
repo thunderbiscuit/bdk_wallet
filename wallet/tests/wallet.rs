@@ -2074,6 +2074,24 @@ fn test_bump_fee_zero_abs() {
 }
 
 #[test]
+#[should_panic(expected = "FeeTooLow")]
+fn test_legacy_bump_fee_zero_abs() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+    let psbt = builder.finish().unwrap();
+
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_absolute(Amount::ZERO);
+    builder.finish().unwrap();
+}
+
+#[test]
 fn test_bump_fee_reduce_change() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
