@@ -446,8 +446,8 @@ fn test_legacy_get_funded_wallet_tx_fee_rate() {
         .expect("transaction fee rate");
 
     // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
-    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining 1000
-    // sats are the transaction fee.
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining
+    // 1000 sats are the transaction fee.
 
     // tx weight = 464 wu, as vbytes = (464)/4 = 116
     // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
@@ -832,6 +832,9 @@ fn test_create_tx_default_sequence() {
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
 }
 
+/// Validate and return the transaction fee from a PSBT.
+/// Panics if extraction fails, fee calculation fails, or if calculated fee doesn't match PSBT's
+/// fee.
 macro_rules! check_fee {
     ($wallet:expr, $psbt: expr) => {{
         let tx = $psbt.clone().extract_tx().expect("failed to extract tx");
