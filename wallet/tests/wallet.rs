@@ -437,6 +437,26 @@ fn test_get_funded_wallet_tx_fee_rate() {
 }
 
 #[test]
+fn test_legacy_get_funded_wallet_tx_fee_rate() {
+    let (wallet, txid) = get_funded_wallet_single(get_test_pkh());
+
+    let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    let tx_fee_rate = wallet
+        .calculate_fee_rate(&tx)
+        .expect("transaction fee rate");
+
+    // The funded wallet contains a tx with a 76_000 sats input and two outputs, one spending 25_000
+    // to a foreign address and one returning 50_000 back to the wallet as change. The remaining 1000
+    // sats are the transaction fee.
+
+    // tx weight = 464 wu, as vbytes = (464)/4 = 116
+    // fee rate (sats per kwu) = fee / weight = 1000sat / 0.464kwu = 2155
+    // fee rate (sats per vbyte ceil) = fee / kwu = 1000 / 116 = 8.621
+    assert_eq!(tx_fee_rate.to_sat_per_kwu(), 2155);
+    assert_eq!(tx_fee_rate.to_sat_per_vb_ceil(), 9);
+}
+
+#[test]
 fn test_list_output() {
     let (wallet, txid) = get_funded_wallet_wpkh();
     let txos = wallet
