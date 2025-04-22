@@ -2326,6 +2326,62 @@ fn test_bump_fee_drain_wallet() {
 }
 
 #[test]
+fn test_legacy_bump_fee_drain_wallet() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    // receive an extra tx so that our wallet has two utxos.
+    let tx = Transaction {
+        version: transaction::Version::ONE,
+        lock_time: absolute::LockTime::ZERO,
+        input: vec![],
+        output: vec![TxOut {
+            value: Amount::from_sat(25_000),
+            script_pubkey: wallet
+                .next_unused_address(KeychainKind::External)
+                .script_pubkey(),
+        }],
+    };
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx.clone());
+    let anchor = ConfirmationBlockTime {
+        block_id: wallet.latest_checkpoint().block_id(),
+        confirmation_time: 42_000,
+    };
+    insert_anchor(&mut wallet, txid, anchor);
+
+    let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+        .unwrap()
+        .assume_checked();
+
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .add_utxo(OutPoint {
+            txid: tx.compute_txid(),
+            vout: 0,
+        })
+        .unwrap()
+        .manually_selected_only();
+    let psbt = builder.finish().unwrap();
+    let tx = psbt.extract_tx().expect("failed to extract tx");
+    let original_sent_received = wallet.sent_and_received(&tx);
+
+    let txid = tx.compute_txid();
+    insert_tx(&mut wallet, tx);
+    assert_eq!(original_sent_received.0, Amount::from_sat(25_000));
+
+    // for the new feerate, it should be enough to reduce the output, but since we specify
+    // `drain_wallet` we expect to spend everything
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder
+        .drain_wallet()
+        .fee_rate(FeeRate::from_sat_per_vb_unchecked(5));
+    let psbt = builder.finish().unwrap();
+    let sent_received = wallet.sent_and_received(&psbt.extract_tx().expect("failed to extract tx"));
+
+    assert_eq!(sent_received.0, Amount::from_sat(75_000));
+}
+
+#[test]
 #[should_panic(expected = "InsufficientFunds")]
 fn test_bump_fee_remove_output_manually_selected_only() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
