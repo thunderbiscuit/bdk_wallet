@@ -1196,6 +1196,22 @@ fn test_create_tx_custom_sighash() {
 }
 
 #[test]
+fn test_legacy_create_tx_custom_sighash() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
+        .sighash(EcdsaSighashType::Single.into());
+    let psbt = builder.finish().unwrap();
+
+    assert_eq!(
+        psbt.inputs[0].sighash_type,
+        Some(EcdsaSighashType::Single.into())
+    );
+}
+
+#[test]
 fn test_create_tx_input_hd_keypaths() {
     use bitcoin::bip32::{DerivationPath, Fingerprint};
     use core::str::FromStr;
