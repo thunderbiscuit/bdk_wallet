@@ -980,6 +980,26 @@ fn test_create_tx_absolute_fee() {
 }
 
 #[test]
+fn test_legacy_create_tx_absolute_fee() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .drain_wallet()
+        .fee_absolute(Amount::from_sat(100));
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::from_sat(100));
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value,
+        Amount::from_sat(50_000) - fee.unwrap_or(Amount::ZERO)
+    );
+}
+
+#[test]
 fn test_create_tx_absolute_zero_fee() {
     let (mut wallet, _) = get_funded_wallet_wpkh();
     let addr = wallet.next_unused_address(KeychainKind::External);
