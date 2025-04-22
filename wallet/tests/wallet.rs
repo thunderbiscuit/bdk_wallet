@@ -1011,11 +1011,35 @@ fn test_create_tx_absolute_zero_fee() {
     let psbt = builder.finish().unwrap();
     let fee = check_fee!(wallet, psbt);
 
-    assert_eq!(fee.unwrap_or(Amount::ZERO), Amount::ZERO);
+    // we can't `unwrap_or(Amount::ZERO)` because the
+    // test would succeed if there was an error with `fee`
+    assert_eq!(fee.unwrap_or(Amount::from_sat(21)), Amount::ZERO);
     assert_eq!(psbt.unsigned_tx.output.len(), 1);
     assert_eq!(
         psbt.unsigned_tx.output[0].value,
-        Amount::from_sat(50_000) - fee.unwrap_or(Amount::ZERO)
+        Amount::from_sat(50_000) - fee.unwrap_or(Amount::from_sat(21))
+    );
+}
+
+#[test]
+fn test_legacy_create_tx_absolute_zero_fee() {
+    let (mut wallet, _) = get_funded_wallet_single(get_test_pkh());
+    let addr = wallet.next_unused_address(KeychainKind::External);
+    let mut builder = wallet.build_tx();
+    builder
+        .drain_to(addr.script_pubkey())
+        .drain_wallet()
+        .fee_absolute(Amount::ZERO);
+    let psbt = builder.finish().unwrap();
+    let fee = check_fee!(wallet, psbt);
+
+    // we can't `unwrap_or(Amount::ZERO)` because the
+    // test would succeed if there was an error with `fee`
+    assert_eq!(fee.unwrap_or(Amount::from_sat(21)), Amount::ZERO);
+    assert_eq!(psbt.unsigned_tx.output.len(), 1);
+    assert_eq!(
+        psbt.unsigned_tx.output[0].value,
+        Amount::from_sat(50_000) - fee.unwrap_or(Amount::from_sat(21))
     );
 }
 
