@@ -123,7 +123,7 @@ fn main() -> anyhow::Result<()> {
     let (sender, receiver) = sync_channel::<Emission>(21);
 
     let signal_sender = sender.clone();
-    ctrlc::set_handler(move || {
+    let _ = ctrlc::set_handler(move || {
         signal_sender
             .send(Emission::SigTerm)
             .expect("failed to send sigterm")
