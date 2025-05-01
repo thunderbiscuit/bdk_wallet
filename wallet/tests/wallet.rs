@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use assert_matches::assert_matches;
-use bdk_chain::{BlockId, ChainPosition, ConfirmationBlockTime};
+use bdk_chain::{BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime};
 use bdk_wallet::coin_selection::{self, LargestFirstCoinSelection};
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
@@ -117,8 +117,8 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
 
     run(
         "store.db",
-        |path| Ok(bdk_file_store::Store::create_new(DB_MAGIC, path)?),
-        |path| Ok(bdk_file_store::Store::open(DB_MAGIC, path)?),
+        |path| Ok(bdk_file_store::Store::create(DB_MAGIC, path)?),
+        |path| Ok(bdk_file_store::Store::load(DB_MAGIC, path)?.0),
     )?;
     run::<bdk_chain::rusqlite::Connection, _, _>(
         "store.sqlite",
@@ -209,12 +209,8 @@ fn wallet_load_checks() -> anyhow::Result<()> {
 
     run(
         "store.db",
-        |path| {
-            Ok(bdk_file_store::Store::<ChangeSet>::create_new(
-                DB_MAGIC, path,
-            )?)
-        },
-        |path| Ok(bdk_file_store::Store::<ChangeSet>::open(DB_MAGIC, path)?),
+        |path| Ok(bdk_file_store::Store::<ChangeSet>::create(DB_MAGIC, path)?),
+        |path| Ok(bdk_file_store::Store::<ChangeSet>::load(DB_MAGIC, path)?.0),
     )?;
     run(
         "store.sqlite",
@@ -4275,7 +4271,11 @@ fn test_wallet_transactions_relevant() {
     let chain_tip = test_wallet.local_chain().tip().block_id();
     let canonical_tx_count_before = test_wallet
         .tx_graph()
-        .list_canonical_txs(test_wallet.local_chain(), chain_tip)
+        .list_canonical_txs(
+            test_wallet.local_chain(),
+            chain_tip,
+            CanonicalizationParams::default(),
+        )
         .count();
 
     // add not relevant transaction to test wallet
@@ -4292,7 +4292,11 @@ fn test_wallet_transactions_relevant() {
     let full_tx_count_after = test_wallet.tx_graph().full_txs().count();
     let canonical_tx_count_after = test_wallet
         .tx_graph()
-        .list_canonical_txs(test_wallet.local_chain(), chain_tip)
+        .list_canonical_txs(
+            test_wallet.local_chain(),
+            chain_tip,
+            CanonicalizationParams::default(),
+        )
         .count();
 
     assert_eq!(relevant_tx_count_before, relevant_tx_count_after);
@@ -4301,7 +4305,11 @@ fn test_wallet_transactions_relevant() {
         .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
     assert!(test_wallet
         .tx_graph()
-        .list_canonical_txs(test_wallet.local_chain(), chain_tip)
+        .list_canonical_txs(
+            test_wallet.local_chain(),
+            chain_tip,
+            CanonicalizationParams::default()
+        )
         .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
     assert!(full_tx_count_before < full_tx_count_after);
     assert!(canonical_tx_count_before < canonical_tx_count_after);
