@@ -2367,6 +2367,35 @@ impl Wallet {
         self.stage.merge(indexed_graph_changeset.into());
     }
 
+    /// Apply evictions of the given txids with their associated timestamps.
+    ///
+    /// This means that any pending unconfirmed tx in this set will no longer be canonical by
+    /// default. Note that an evicted tx can become canonical if it is later seen again or
+    /// observed on-chain.
+    ///
+    /// This stages the changes which need to be persisted.
+    pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
+        let chain = &self.chain;
+        let canon_txids: Vec<Txid> = self
+            .indexed_graph
+            .graph()
+            .list_canonical_txs(
+                chain,
+                chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .map(|c| c.tx_node.txid)
+            .collect();
+
+        let changeset = self.indexed_graph.batch_insert_relevant_evicted_at(
+            evicted_txs
+                .into_iter()
+                .filter(|(txid, _)| canon_txids.contains(txid)),
+        );
+
+        self.stage.merge(changeset.into());
+    }
+
     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
     /// keychain with an associated descriptor. For example in case the wallet was created
     /// with only one keychain, passing [`KeychainKind::Internal`] here will instead return
