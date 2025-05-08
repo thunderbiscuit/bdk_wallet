@@ -3,12 +3,17 @@ use bdk_bitcoind_rpc::{
     Emitter, MempoolEvent,
 };
 use bdk_wallet::{
-    bitcoin::{Block, Network, Txid},
+    bitcoin::{Block, Network},
     file_store::Store,
     KeychainKind, Wallet,
 };
 use clap::{self, Parser};
-use std::{path::PathBuf, sync::mpsc::sync_channel, thread::spawn, time::Instant};
+use std::{
+    path::PathBuf,
+    sync::{mpsc::sync_channel, Arc},
+    thread::spawn,
+    time::Instant,
+};
 
 const DB_MAGIC: &str = "bdk-rpc-wallet-example";
 
@@ -79,7 +84,7 @@ enum Emission {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let rpc_client = args.client()?;
+    let rpc_client = Arc::new(args.client()?);
     println!(
         "Connected to Bitcoin Core RPC at {:?}",
         rpc_client.get_blockchain_info().unwrap()
@@ -129,14 +134,15 @@ fn main() -> anyhow::Result<()> {
             .expect("failed to send sigterm")
     });
 
-    let emitter_tip = wallet_tip.clone();
+    let mut emitter = Emitter::new(
+        rpc_client,
+        wallet_tip,
+        args.start_height,
+        wallet
+            .transactions()
+            .filter(|tx| tx.chain_position.is_unconfirmed()),
+    );
     spawn(move || -> Result<(), anyhow::Error> {
-        let mut emitter = Emitter::new(
-            &rpc_client,
-            emitter_tip,
-            args.start_height,
-            core::iter::empty::<Txid>(),
-        );
         while let Some(emission) = emitter.next_block()? {
             sender.send(Emission::Block(emission))?;
         }
@@ -167,6 +173,7 @@ fn main() -> anyhow::Result<()> {
             }
             Emission::Mempool(event) => {
                 let start_apply_mempool = Instant::now();
+                wallet.apply_evicted_txs(event.evicted_ats());
                 wallet.apply_unconfirmed_txs(event.new_txs);
                 wallet.persist(&mut db)?;
                 println!(
