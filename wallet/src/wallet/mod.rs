@@ -30,8 +30,8 @@ use bdk_chain::{
         SyncResponse,
     },
     tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
-    BlockId, ChainPosition, ConfirmationBlockTime, DescriptorExt, FullTxOut, Indexed,
-    IndexedTxGraph, Indexer, Merge,
+    BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
+    FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
 use bitcoin::{
     absolute,
@@ -816,6 +816,7 @@ impl Wallet {
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
@@ -830,6 +831,7 @@ impl Wallet {
             .filter_chain_txouts(
                 &self.chain,
                 self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
                 self.indexed_graph.index.outpoints().iter().cloned(),
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
@@ -883,6 +885,7 @@ impl Wallet {
             .filter_chain_unspents(
                 &self.chain,
                 self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
                 core::iter::once(((), op)),
             )
             .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
@@ -1058,7 +1061,11 @@ impl Wallet {
     pub fn get_tx(&self, txid: Txid) -> Option<WalletTx> {
         let graph = self.indexed_graph.graph();
         graph
-            .list_canonical_txs(&self.chain, self.chain.tip().block_id())
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
             .find(|tx| tx.tx_node.txid == txid)
     }
 
@@ -1077,7 +1084,11 @@ impl Wallet {
         let tx_graph = self.indexed_graph.graph();
         let tx_index = &self.indexed_graph.index;
         tx_graph
-            .list_canonical_txs(&self.chain, self.chain.tip().block_id())
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
             .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
     }
 
@@ -1112,6 +1123,7 @@ impl Wallet {
         self.indexed_graph.graph().balance(
             &self.chain,
             self.chain.tip().block_id(),
+            CanonicalizationParams::default(),
             self.indexed_graph.index.outpoints().iter().cloned(),
             |&(k, _), _| k == KeychainKind::Internal,
         )
@@ -1590,7 +1602,7 @@ impl Wallet {
         let txout_index = &self.indexed_graph.index;
         let chain_tip = self.chain.tip().block_id();
         let chain_positions = graph
-            .list_canonical_txs(&self.chain, chain_tip)
+            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
             .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
             .collect::<HashMap<Txid, _>>();
 
@@ -1858,7 +1870,7 @@ impl Wallet {
         let confirmation_heights = self
             .indexed_graph
             .graph()
-            .list_canonical_txs(&self.chain, chain_tip)
+            .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
             .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
             // This is for a small performance gain. Although `.filter` filters out excess txs, it
             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
@@ -2010,6 +2022,7 @@ impl Wallet {
                 .filter_chain_unspents(
                     &self.chain,
                     self.chain.tip().block_id(),
+                    CanonicalizationParams::default(),
                     self.indexed_graph.index.outpoints().iter().cloned(),
                 )
                 // only create LocalOutput if UTxO is mature
@@ -2219,31 +2232,7 @@ impl Wallet {
     ///
     /// After applying updates you should persist the staged wallet changes. For an example of how
     /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
-    #[cfg(feature = "std")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
     pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
-        use std::time::*;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time now must surpass epoch anchor");
-        self.apply_update_at(update, now.as_secs())
-    }
-
-    /// Applies an `update` alongside a `seen_at` timestamp and stages the changes.
-    ///
-    /// `seen_at` represents when the update is seen (in unix seconds). It is used to determine the
-    /// `last_seen`s for all transactions in the update which have no corresponding anchor(s). The
-    /// `last_seen` value is used internally to determine precedence of conflicting unconfirmed
-    /// transactions (where the transaction with the lower `last_seen` value is omitted from the
-    /// canonical history).
-    ///
-    /// Use [`apply_update`](Wallet::apply_update) to have the `seen_at` value automatically set to
-    /// the current time.
-    pub fn apply_update_at(
-        &mut self,
-        update: impl Into<Update>,
-        seen_at: u64,
-    ) -> Result<(), CannotConnectError> {
         let update = update.into();
         let mut changeset = match update.chain {
             Some(chain_update) => ChangeSet::from(self.chain.apply_update(chain_update)?),
@@ -2255,11 +2244,7 @@ impl Wallet {
             .index
             .reveal_to_target_multi(&update.last_active_indices);
         changeset.merge(index_changeset.into());
-        changeset.merge(
-            self.indexed_graph
-                .apply_update_at(update.tx_update, Some(seen_at))
-                .into(),
-        );
+        changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
         self.stage.merge(changeset);
         Ok(())
     }
@@ -2382,6 +2367,35 @@ impl Wallet {
         self.stage.merge(indexed_graph_changeset.into());
     }
 
+    /// Apply evictions of the given txids with their associated timestamps.
+    ///
+    /// This means that any pending unconfirmed tx in this set will no longer be canonical by
+    /// default. Note that an evicted tx can become canonical if it is later seen again or
+    /// observed on-chain.
+    ///
+    /// This stages the changes which need to be persisted.
+    pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
+        let chain = &self.chain;
+        let canon_txids: Vec<Txid> = self
+            .indexed_graph
+            .graph()
+            .list_canonical_txs(
+                chain,
+                chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .map(|c| c.tx_node.txid)
+            .collect();
+
+        let changeset = self.indexed_graph.batch_insert_relevant_evicted_at(
+            evicted_txs
+                .into_iter()
+                .filter(|(txid, _)| canon_txids.contains(txid)),
+        );
+
+        self.stage.merge(changeset.into());
+    }
+
     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
     /// keychain with an associated descriptor. For example in case the wallet was created
     /// with only one keychain, passing [`KeychainKind::Internal`] here will instead return
@@ -2397,16 +2411,48 @@ impl Wallet {
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
 impl Wallet {
+    /// Create a partial [`SyncRequest`] for all revealed spks at `start_time`.
+    ///
+    /// The `start_time` is used to record the time that a mempool transaction was last seen
+    /// (or evicted). See [`Wallet::start_sync_with_revealed_spks`] for more.
+    pub fn start_sync_with_revealed_spks_at(
+        &self,
+        start_time: u64,
+    ) -> SyncRequestBuilder<(KeychainKind, u32)> {
+        use bdk_chain::keychain_txout::SyncRequestBuilderExt;
+        SyncRequest::builder_at(start_time)
+            .chain_tip(self.chain.tip())
+            .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
+            .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
+    }
+
     /// Create a partial [`SyncRequest`] for this wallet for all revealed spks.
     ///
     /// This is the first step when performing a spk-based wallet partial sync, the returned
     /// [`SyncRequest`] collects all revealed script pubkeys from the wallet keychain needed to
     /// start a blockchain sync with a spk based blockchain client.
+    ///
+    /// The time of the sync is the current system time and is used to record the
+    /// tx last-seen for mempool transactions. Or if an expected transaction is missing
+    /// or evicted, it is the time of the eviction. Note that timestamps may only increase
+    /// to be counted by the tx graph. To supply your own start time see
+    /// [`Wallet::start_sync_with_revealed_spks_at`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
     pub fn start_sync_with_revealed_spks(&self) -> SyncRequestBuilder<(KeychainKind, u32)> {
         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
         SyncRequest::builder()
             .chain_tip(self.chain.tip())
             .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
+            .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
     }
 
     /// Create a [`FullScanRequest] for this wallet.
@@ -2417,9 +2463,22 @@ impl Wallet {
     ///
     /// This operation is generally only used when importing or restoring a previously used wallet
     /// in which the list of used scripts is not known.
+    ///
+    /// The time of the scan is the current system time and is used to record the tx last-seen for
+    /// mempool transactions. To supply your own start time see [`Wallet::start_full_scan_at`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
     pub fn start_full_scan(&self) -> FullScanRequestBuilder<KeychainKind> {
         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
         FullScanRequest::builder()
+            .chain_tip(self.chain.tip())
+            .spks_from_indexer(&self.indexed_graph.index)
+    }
+
+    /// Create a [`FullScanRequest`] builder at `start_time`.
+    pub fn start_full_scan_at(&self, start_time: u64) -> FullScanRequestBuilder<KeychainKind> {
+        use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
+        FullScanRequest::builder_at(start_time)
             .chain_tip(self.chain.tip())
             .spks_from_indexer(&self.indexed_graph.index)
     }

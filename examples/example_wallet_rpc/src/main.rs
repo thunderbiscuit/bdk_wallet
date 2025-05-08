@@ -1,14 +1,19 @@
 use bdk_bitcoind_rpc::{
     bitcoincore_rpc::{Auth, Client, RpcApi},
-    Emitter,
+    Emitter, MempoolEvent,
 };
 use bdk_wallet::{
-    bitcoin::{Block, Network, Transaction},
+    bitcoin::{Block, Network},
     file_store::Store,
     KeychainKind, Wallet,
 };
 use clap::{self, Parser};
-use std::{path::PathBuf, sync::mpsc::sync_channel, thread::spawn, time::Instant};
+use std::{
+    path::PathBuf,
+    sync::{mpsc::sync_channel, Arc},
+    thread::spawn,
+    time::Instant,
+};
 
 const DB_MAGIC: &str = "bdk-rpc-wallet-example";
 
@@ -73,21 +78,21 @@ impl Args {
 enum Emission {
     SigTerm,
     Block(bdk_bitcoind_rpc::BlockEvent<Block>),
-    Mempool(Vec<(Transaction, u64)>),
+    Mempool(MempoolEvent),
 }
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let rpc_client = args.client()?;
+    let rpc_client = Arc::new(args.client()?);
     println!(
         "Connected to Bitcoin Core RPC at {:?}",
         rpc_client.get_blockchain_info().unwrap()
     );
 
     let start_load_wallet = Instant::now();
-    let mut db =
-        Store::<bdk_wallet::ChangeSet>::open_or_create_new(DB_MAGIC.as_bytes(), args.db_path)?;
+    let (mut db, _) =
+        Store::<bdk_wallet::ChangeSet>::load_or_create(DB_MAGIC.as_bytes(), args.db_path)?;
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(args.descriptor.clone()))
         .descriptor(KeychainKind::Internal, args.change_descriptor.clone())
@@ -129,9 +134,15 @@ fn main() -> anyhow::Result<()> {
             .expect("failed to send sigterm")
     });
 
-    let emitter_tip = wallet_tip.clone();
+    let mut emitter = Emitter::new(
+        rpc_client,
+        wallet_tip,
+        args.start_height,
+        wallet
+            .transactions()
+            .filter(|tx| tx.chain_position.is_unconfirmed()),
+    );
     spawn(move || -> Result<(), anyhow::Error> {
-        let mut emitter = Emitter::new(&rpc_client, emitter_tip, args.start_height);
         while let Some(emission) = emitter.next_block()? {
             sender.send(Emission::Block(emission))?;
         }
@@ -160,9 +171,10 @@ fn main() -> anyhow::Result<()> {
                     hash, height, elapsed
                 );
             }
-            Emission::Mempool(mempool_emission) => {
+            Emission::Mempool(event) => {
                 let start_apply_mempool = Instant::now();
-                wallet.apply_unconfirmed_txs(mempool_emission);
+                wallet.apply_evicted_txs(event.evicted_ats());
+                wallet.apply_unconfirmed_txs(event.new_txs);
                 wallet.persist(&mut db)?;
                 println!(
                     "Applied unconfirmed transactions in {}s",
