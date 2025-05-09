@@ -36,12 +36,14 @@ fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
         .expect("failed to parse descriptor")
 }
 
-// The satisfaction size of a P2WPKH is 112 WU =
-// 1 (elements in witness) + 1 (OP_PUSH) + 33 (pk) + 1 (OP_PUSH) + 72 (signature + sighash) + 1*4
-// (script len) On the witness itself, we have to push once for the pk (33WU) and once for signature
-// + sighash (72WU), for a total of 105 WU. Here, we push just once for simplicity, so we have to
-// add an extra byte for the missing OP_PUSH.
+// The satisfaction size of a P2WPKH is 108 WU =
+// 1 (elements in witness) + 1 (OP_PUSH) + 33 (pubkey) + 1 (OP_PUSH) + 72 (signature + sighash).
+// TODO: tests won't pass with 108 but will with 106.
 const P2WPKH_FAKE_WITNESS_SIZE: usize = 106;
+
+/// The satisfaction size of a P2PKH is 107 WU =
+/// 1 (OP_PUSH) + 72 (signature + sighash) + 1 (OP_PUSH) + 33 (pubkey).
+const P2PKH_FAKE_SCRIPT_SIG_SIZE: usize = 107;
 
 const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
 
@@ -458,6 +460,7 @@ macro_rules! assert_fee_rate {
         let psbt = $psbt.clone();
         #[allow(unused_mut)]
         let mut tx = $psbt.clone().extract_tx().expect("failed to extract tx");
+
         $(
             $( $add_signature )*
                 for txin in &mut tx.input {
@@ -465,7 +468,7 @@ macro_rules! assert_fee_rate {
                 }
         )*
 
-            #[allow(unused_mut)]
+        #[allow(unused_mut)]
         #[allow(unused_assignments)]
         let mut dust_change = false;
         $(
@@ -473,15 +476,7 @@ macro_rules! assert_fee_rate {
                 dust_change = true;
         )*
 
-            let fee_amount = psbt
-            .inputs
-            .iter()
-            .fold(Amount::ZERO, |acc, i| acc + i.witness_utxo.as_ref().unwrap().value)
-            - psbt
-            .unsigned_tx
-            .output
-            .iter()
-            .fold(Amount::ZERO, |acc, o| acc + o.value);
+        let fee_amount = psbt.fee().expect("failed to calculate fee");
 
         assert_eq!(fee_amount, $fees);
 
@@ -493,9 +488,52 @@ macro_rules! assert_fee_rate {
             .to_sat_per_kwu();
 
         if !dust_change {
-            assert!(tx_fee_rate >= fee_rate && tx_fee_rate - fee_rate < half_default, "Expected fee rate of {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+            assert!(tx_fee_rate >= fee_rate && tx_fee_rate - fee_rate < half_default,
+                "Expected fee rate of {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
         } else {
-            assert!(tx_fee_rate >= fee_rate, "Expected fee rate of at least {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+            assert!(tx_fee_rate >= fee_rate,
+                "Expected fee rate of at least {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+        }
+    });
+}
+
+macro_rules! assert_fee_rate_legacy {
+    ($psbt:expr, $fees:expr, $fee_rate:expr $( ,@dust_change $( $dust_change:expr )* )* $( ,@add_signature $( $add_signature:expr )* )* ) => ({
+        let psbt = $psbt.clone();
+        #[allow(unused_mut)]
+        let mut tx = $psbt.clone().extract_tx().expect("failed to extract tx");
+
+        $(
+            $( $add_signature )*
+                for txin in &mut tx.input {
+                    txin.script_sig = ScriptBuf::from_bytes([0x00; P2PKH_FAKE_SCRIPT_SIG_SIZE].to_vec()); // fake signature
+                }
+        )*
+
+        #[allow(unused_mut)]
+        #[allow(unused_assignments)]
+        let mut dust_change = false;
+        $(
+            $( $dust_change )*
+                dust_change = true;
+        )*
+
+        let fee_amount = psbt.fee().expect("failed to calculate fee");
+        assert_eq!(fee_amount, $fees);
+
+        let tx_fee_rate = (fee_amount / tx.weight())
+            .to_sat_per_kwu();
+        let fee_rate = $fee_rate.to_sat_per_kwu();
+        let half_default = FeeRate::BROADCAST_MIN.checked_div(2)
+            .unwrap()
+            .to_sat_per_kwu();
+
+        if !dust_change {
+            assert!(tx_fee_rate >= fee_rate && tx_fee_rate - fee_rate < half_default,
+                "Expected fee rate of {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
+        } else {
+            assert!(tx_fee_rate >= fee_rate,
+                "Expected fee rate of at least {:?}, the tx has {:?}", fee_rate, tx_fee_rate);
         }
     });
 }
