@@ -36,12 +36,13 @@ fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
         .expect("failed to parse descriptor")
 }
 
-// The satisfaction size of a P2WPKH is 108 WU =
-// 1 (elements in witness) + 1 (OP_PUSH) + 33 (pubkey) + 1 (OP_PUSH) + 72 (signature + sighash).
-// TODO: tests won't pass with 108 but will with 106.
-const P2WPKH_FAKE_WITNESS_SIZE: usize = 106;
+/// The satisfaction size of P2WPKH is 108 WU =
+/// 1 (elements in witness) + 1 (size)
+/// + 72 (signature + sighash) + 1 (size) + 33 (pubkey).
+const P2WPKH_FAKE_PK_SIZE: usize = 72;
+const P2WPKH_FAKE_SIG_SIZE: usize = 33;
 
-/// The satisfaction size of a P2PKH is 107 WU =
+/// The satisfaction size of P2PKH is 107 =
 /// 1 (OP_PUSH) + 72 (signature + sighash) + 1 (OP_PUSH) + 33 (pubkey).
 const P2PKH_FAKE_SCRIPT_SIG_SIZE: usize = 107;
 
@@ -484,7 +485,8 @@ macro_rules! assert_fee_rate {
         $(
             $( $add_signature )*
                 for txin in &mut tx.input {
-                    txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+                    txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+                    txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
                 }
         )*
 
@@ -2776,7 +2778,8 @@ fn test_bump_fee_add_input_change_dust() {
 
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // to get realistic weight
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     let original_tx_weight = tx.weight();
     assert_eq!(tx.input.len(), 1);
@@ -2847,7 +2850,8 @@ fn test_bump_fee_force_add_input() {
     let original_sent_received = wallet.sent_and_received(&tx);
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx.clone());
     // the new fee_rate is low enough that just reducing the change would be fine, but we force
@@ -2910,7 +2914,8 @@ fn test_bump_fee_absolute_force_add_input() {
     let txid = tx.compute_txid();
     // skip saving the new utxos, we know they can't be used anyways
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx.clone());
 
@@ -2980,7 +2985,8 @@ fn test_bump_fee_unconfirmed_inputs_only() {
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx);
     let mut builder = wallet.build_fee_bump(txid).unwrap();
@@ -3008,7 +3014,8 @@ fn test_bump_fee_unconfirmed_input() {
     let mut tx = psbt.extract_tx().expect("failed to extract tx");
     let txid = tx.compute_txid();
     for txin in &mut tx.input {
-        txin.witness.push([0x00; P2WPKH_FAKE_WITNESS_SIZE]); // fake signature
+        txin.witness.push([0x00; P2WPKH_FAKE_SIG_SIZE]); // sig (72)
+        txin.witness.push([0x00; P2WPKH_FAKE_PK_SIZE]); // pk (33)
     }
     insert_tx(&mut wallet, tx);
 
