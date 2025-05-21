@@ -14,23 +14,23 @@ type IndexedTxGraphChangeSet =
 /// The change set is responsible for transmiting data between the persistent storage layer and the
 /// core library components. Specifically, it serves two primary functions:
 ///
-/// 1) Recording incremental changes to the in-memory representation that need to be persisted
-///     to disk
+/// 1) Recording incremental changes to the in-memory representation that need to be persisted to
+///    disk
 /// 2) Applying aggregate changes from the persistence layer to the in-memory representation at
-///     startup
+///    startup
 ///
 /// ## Contract
 ///
 /// The change set maintains and enforces the following properties:
 ///
 /// * Change sets must implement [`Serialize`] and [`Deserialize`] to meet the definition from
-///     above.
+///   above.
 /// * Change sets must implement [`Default`] as a way of instantiating new empty objects.
 /// * Change sets must implement [`Merge`] so that many instances can be aggregated into a single
-///     instance.
+///   instance.
 /// * A change set is composed of a number of individual "sub-change sets" that adhere to the same
-///     rules as above. This is for increased modularity and portability. For example the core
-///     modules each have their own change set (`tx_graph`, `local_chain`, etc).
+///   rules as above. This is for increased modularity and portability. For example the core modules
+///   each have their own change set (`tx_graph`, `local_chain`, etc).
 ///
 /// ## Members and required fields
 ///

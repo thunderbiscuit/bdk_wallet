@@ -62,9 +62,10 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 /// For a blocking version, use [`WalletPersister`].
 ///
 /// Associated functions of this trait should not be called directly, and the trait is designed so
-/// that associated functions are hard to find (since they are not methods!). [`AsyncWalletPersister`] is
-/// used by [`PersistedWallet`] (a light wrapper around [`Wallet`]) which enforces some level of
-/// safety. Refer to [`PersistedWallet`] for more about the safety checks.
+/// that associated functions are hard to find (since they are not methods!).
+/// [`AsyncWalletPersister`] is used by [`PersistedWallet`] (a light wrapper around [`Wallet`])
+/// which enforces some level of safety. Refer to [`PersistedWallet`] for more about the safety
+/// checks.
 pub trait AsyncWalletPersister {
     /// Error type of the persister.
     type Error;
@@ -115,11 +116,11 @@ pub trait AsyncWalletPersister {
 ///
 /// * Ensure the persister is initialized before data is persisted.
 /// * Ensure there were no previously persisted wallet data before creating a fresh wallet and
-///     persisting it.
+///   persisting it.
 /// * Only clear the staged changes of [`Wallet`] after persisting succeeds.
 /// * Ensure the wallet is persisted to the same `P` type as when created/loaded. Note that this is
-///     not completely fool-proof as you can have multiple instances of the same `P` type that are
-///     connected to different databases.
+///   not completely fool-proof as you can have multiple instances of the same `P` type that are
+///   connected to different databases.
 #[derive(Debug)]
 pub struct PersistedWallet<P> {
     inner: Wallet,
