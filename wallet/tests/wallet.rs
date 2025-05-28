@@ -39,8 +39,8 @@ fn parse_descriptor(s: &str) -> (Descriptor<DescriptorPublicKey>, KeyMap) {
 /// The satisfaction size of P2WPKH is 108 WU =
 /// 1 (elements in witness) + 1 (size)
 /// + 72 (signature + sighash) + 1 (size) + 33 (pubkey).
-const P2WPKH_FAKE_PK_SIZE: usize = 72;
-const P2WPKH_FAKE_SIG_SIZE: usize = 33;
+const P2WPKH_FAKE_PK_SIZE: usize = 33;
+const P2WPKH_FAKE_SIG_SIZE: usize = 72;
 
 /// The satisfaction size of P2PKH is 107 =
 /// 1 (OP_PUSH) + 72 (signature + sighash) + 1 (OP_PUSH) + 33 (pubkey).
