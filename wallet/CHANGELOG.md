@@ -7,6 +7,34 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wallet-2.0.0-beta.0]
+
+### Added
+
+- Add zizmor github actions security analysis workflow #8
+- docs(wallet): provide guidance on use of ChangeSet #198
+- ci: Add Ubuntu 24.04 ARM support for build-test job #200
+- Bring back TxDetails #201
+- feat(test): add legacy descriptor tests #214
+
+### Fixed
+
+- fix: no Debug on Display implementations #12
+- fix: Validate prevouts in get_psbt_input #232
+- fix(wallet): fix into_descriptor_key for DescriptorPublicKey #241
+
+### Changed
+
+- chore: split bdk_wallet into it's own repository #2
+- chore: remove lazy_static from Cargo.toml #218
+- chore(example_wallet_rpc): bump ctrlc to 3.4.6 #217
+- chore(example_wallet_esplora_async): bump tokio to 1.38.1 #219
+- deps!: update bdk_chain to 0.22.0 #208
+- Chore: migrate library version naming convention on master #215
+- chore: create and apply rustfmt.toml #213
+- deps: Update bdk_chain to 0.23.0 #247
+- feat(test-utils)!: use bitcoin::Amount instead of u64 on tests #223
+
 ## [wallet-1.2.0]
 
 ### Changed
@@ -1272,3 +1300,4 @@ final transaction is created by calling `finish` on the builder.
 [wallet-1.0.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-1.0.0
 [wallet-1.1.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-1.1.0
 [wallet-1.2.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-1.2.0
+[wallet-2.0.0-beta.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.0.0-beta.0
