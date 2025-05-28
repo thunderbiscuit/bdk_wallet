@@ -39,6 +39,7 @@ pub struct CreateParams {
     pub(crate) network: Network,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
+    pub(crate) use_spk_cache: bool,
 }
 
 impl CreateParams {
@@ -61,6 +62,7 @@ impl CreateParams {
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
+            use_spk_cache: false,
         }
     }
 
@@ -82,6 +84,7 @@ impl CreateParams {
             network: Network::Bitcoin,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
+            use_spk_cache: false,
         }
     }
 
@@ -115,6 +118,15 @@ impl CreateParams {
     /// the default value [`DEFAULT_LOOKAHEAD`] is sufficient.
     pub fn lookahead(mut self, lookahead: u32) -> Self {
         self.lookahead = lookahead;
+        self
+    }
+
+    /// Use a persistent cache of indexed script pubkeys (SPKs).
+    ///
+    /// **Note:** To persist across restarts, this option must also be set at load time with
+    /// [`LoadParams`](LoadParams::use_spk_cache).
+    pub fn use_spk_cache(mut self, use_spk_cache: bool) -> Self {
+        self.use_spk_cache = use_spk_cache;
         self
     }
 
@@ -157,6 +169,7 @@ pub struct LoadParams {
     pub(crate) check_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) check_change_descriptor: Option<Option<DescriptorToExtract>>,
     pub(crate) extract_keys: bool,
+    pub(crate) use_spk_cache: bool,
 }
 
 impl LoadParams {
@@ -173,6 +186,7 @@ impl LoadParams {
             check_descriptor: None,
             check_change_descriptor: None,
             extract_keys: false,
+            use_spk_cache: false,
         }
     }
 
@@ -231,6 +245,15 @@ impl LoadParams {
     /// See also [`LoadParams::descriptor`].
     pub fn extract_keys(mut self) -> Self {
         self.extract_keys = true;
+        self
+    }
+
+    /// Use a persistent cache of indexed script pubkeys (SPKs).
+    ///
+    /// **Note:** This should only be used if you have previously persisted a cache of script
+    /// pubkeys using [`CreateParams::use_spk_cache`].
+    pub fn use_spk_cache(mut self, use_spk_cache: bool) -> Self {
+        self.use_spk_cache = use_spk_cache;
         self
     }
 

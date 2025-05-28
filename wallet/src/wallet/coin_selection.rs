@@ -750,6 +750,7 @@ mod test {
             value,
             index,
             ChainPosition::Unconfirmed {
+                first_seen: Some(last_seen),
                 last_seen: Some(last_seen),
             },
         )
@@ -850,7 +851,10 @@ mod test {
                             transitively: None,
                         }
                     } else {
-                        ChainPosition::Unconfirmed { last_seen: Some(0) }
+                        ChainPosition::Unconfirmed {
+                            first_seen: Some(1),
+                            last_seen: Some(1),
+                        }
                     },
                 }),
             });
@@ -875,7 +879,10 @@ mod test {
                     keychain: KeychainKind::External,
                     is_spent: false,
                     derivation_index: 42,
-                    chain_position: ChainPosition::Unconfirmed { last_seen: Some(0) },
+                    chain_position: ChainPosition::Unconfirmed {
+                        first_seen: Some(1),
+                        last_seen: Some(1),
+                    },
                 }),
             })
             .collect()
@@ -1231,7 +1238,10 @@ mod test {
         optional.push(utxo(
             Amount::from_sat(500_000),
             3,
-            ChainPosition::<ConfirmationBlockTime>::Unconfirmed { last_seen: Some(0) },
+            ChainPosition::<ConfirmationBlockTime>::Unconfirmed {
+                first_seen: Some(1),
+                last_seen: Some(1),
+            },
         ));
 
         // Defensive assertions, for sanity and in case someone changes the test utxos vector.
