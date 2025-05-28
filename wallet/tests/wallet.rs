@@ -1,10 +1,14 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context;
 use assert_matches::assert_matches;
-use bdk_chain::{BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime};
+use bdk_chain::{
+    keychain_txout::DEFAULT_LOOKAHEAD, BlockId, CanonicalizationParams, ChainPosition,
+    ConfirmationBlockTime, DescriptorExt,
+};
 use bdk_wallet::coin_selection::{self, LargestFirstCoinSelection};
 use bdk_wallet::descriptor::{calc_checksum, DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
@@ -70,6 +74,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
             let mut db = create_db(&file_path)?;
             let mut wallet = Wallet::create(external_desc, internal_desc)
                 .network(Network::Testnet)
+                .use_spk_cache(true)
                 .create_wallet(&mut db)?;
             wallet.reveal_next_address(KeychainKind::External);
 
@@ -79,13 +84,6 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         };
 
         // recover wallet
-        {
-            let mut db = open_db(&file_path).context("failed to recover db")?;
-            let _ = Wallet::load()
-                .check_network(Network::Testnet)
-                .load_wallet(&mut db)?
-                .expect("wallet must exist");
-        }
         {
             let mut db = open_db(&file_path).context("failed to recover db")?;
             let wallet = Wallet::load()
@@ -111,6 +109,67 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
                     .into_wallet_descriptor(&secp, wallet.network())
                     .unwrap()
                     .0
+            );
+        }
+        // Test SPK cache
+        {
+            let mut db = open_db(&file_path).context("failed to recover db")?;
+            let mut wallet = Wallet::load()
+                .check_network(Network::Testnet)
+                .use_spk_cache(true)
+                .load_wallet(&mut db)?
+                .expect("wallet must exist");
+
+            let external_did = wallet
+                .public_descriptor(KeychainKind::External)
+                .descriptor_id();
+            let internal_did = wallet
+                .public_descriptor(KeychainKind::Internal)
+                .descriptor_id();
+
+            assert!(wallet.staged().is_none());
+
+            let _addr = wallet.reveal_next_address(KeychainKind::External);
+            let cs = wallet.staged().expect("we should have staged a changeset");
+            assert!(!cs.indexer.spk_cache.is_empty(), "failed to cache spks");
+            assert_eq!(cs.indexer.spk_cache.len(), 2, "we persisted two keychains");
+            let spk_cache: &BTreeMap<u32, ScriptBuf> =
+                cs.indexer.spk_cache.get(&external_did).unwrap();
+            assert_eq!(spk_cache.len() as u32, 1 + 1 + DEFAULT_LOOKAHEAD);
+            assert_eq!(spk_cache.keys().last(), Some(&26));
+            let spk_cache = cs.indexer.spk_cache.get(&internal_did).unwrap();
+            assert_eq!(spk_cache.len() as u32, DEFAULT_LOOKAHEAD);
+            assert_eq!(spk_cache.keys().last(), Some(&24));
+            // Clear the stage
+            let _ = wallet.take_staged();
+            let _addr = wallet.reveal_next_address(KeychainKind::Internal);
+            let cs = wallet.staged().unwrap();
+            assert_eq!(cs.indexer.spk_cache.len(), 1);
+            let spk_cache = cs.indexer.spk_cache.get(&internal_did).unwrap();
+            assert_eq!(spk_cache.len(), 1);
+            assert_eq!(spk_cache.keys().next(), Some(&25));
+        }
+        // SPK cache requires load params
+        {
+            let mut db = open_db(&file_path).context("failed to recover db")?;
+            let mut wallet = Wallet::load()
+                .check_network(Network::Testnet)
+                // .use_spk_cache(false)
+                .load_wallet(&mut db)?
+                .expect("wallet must exist");
+
+            let internal_did = wallet
+                .public_descriptor(KeychainKind::Internal)
+                .descriptor_id();
+
+            assert!(wallet.staged().is_none());
+
+            let _addr = wallet.reveal_next_address(KeychainKind::Internal);
+            let cs = wallet.staged().expect("we should have staged a changeset");
+            assert_eq!(cs.indexer.last_revealed.get(&internal_did), Some(&0));
+            assert!(
+                cs.indexer.spk_cache.is_empty(),
+                "we didn't set `use_spk_cache`"
             );
         }
 
@@ -4406,7 +4465,7 @@ fn test_taproot_load_descriptor_duplicated_keys() {
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(
-    expected = "replenish lookahead: must not have existing spk: keychain=Internal, lookahead=25, next_store_index=0, next_reveal_index=0"
+    expected = "replenish lookahead: must not have existing spk: keychain=Internal, lookahead=25, next_index=0"
 )]
 fn test_keychains_with_overlapping_spks() {
     // this can happen if a non-wildcard descriptor keychain derives an spk that a

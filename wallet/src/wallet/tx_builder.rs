@@ -1024,7 +1024,10 @@ mod test {
                 txout: TxOut::NULL,
                 keychain: KeychainKind::External,
                 is_spent: false,
-                chain_position: chain::ChainPosition::Unconfirmed { last_seen: Some(0) },
+                chain_position: chain::ChainPosition::Unconfirmed {
+                    first_seen: Some(1),
+                    last_seen: Some(1),
+                },
                 derivation_index: 0,
             },
             LocalOutput {

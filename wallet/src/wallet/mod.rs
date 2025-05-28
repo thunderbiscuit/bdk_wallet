@@ -438,7 +438,12 @@ impl Wallet {
             None => (None, Arc::new(SignersContainer::new())),
         };
 
-        let index = create_indexer(descriptor, change_descriptor, params.lookahead)?;
+        let index = create_indexer(
+            descriptor,
+            change_descriptor,
+            params.lookahead,
+            params.use_spk_cache,
+        )?;
 
         let descriptor = index.get_descriptor(KeychainKind::External).cloned();
         let change_descriptor = index.get_descriptor(KeychainKind::Internal).cloned();
@@ -637,8 +642,13 @@ impl Wallet {
             None => Arc::new(SignersContainer::new()),
         };
 
-        let index = create_indexer(descriptor, change_descriptor, params.lookahead)
-            .map_err(LoadError::Descriptor)?;
+        let index = create_indexer(
+            descriptor,
+            change_descriptor,
+            params.lookahead,
+            params.use_spk_cache,
+        )
+        .map_err(LoadError::Descriptor)?;
 
         let mut indexed_graph = IndexedTxGraph::new(index);
         indexed_graph.apply_changeset(changeset.indexer.into());
@@ -1118,9 +1128,9 @@ impl Wallet {
     ///         "tx is an ancestor of a tx anchored in {}:{}",
     ///         anchor.block_id.height, anchor.block_id.hash,
     ///     ),
-    ///     ChainPosition::Unconfirmed { last_seen } => println!(
-    ///         "tx is last seen at {:?}, it is unconfirmed as it is not anchored in the best chain",
-    ///         last_seen,
+    ///     ChainPosition::Unconfirmed { first_seen, last_seen } => println!(
+    ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not anchored in the best chain",
+    ///         first_seen, last_seen
     ///     ),
     /// }
     /// ```
@@ -1611,13 +1621,12 @@ impl Wallet {
 
         // recording changes to the change keychain
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
-            let (_, index_changeset) = self
-                .indexed_graph
-                .index
-                .reveal_to_target(keychain, index)
-                .expect("must not be None");
-            self.stage.merge(index_changeset.into());
-            self.mark_used(keychain, index);
+            if let Some((_, index_changeset)) =
+                self.indexed_graph.index.reveal_to_target(keychain, index)
+            {
+                self.stage.merge(index_changeset.into());
+                self.mark_used(keychain, index);
+            }
         }
 
         Ok(psbt)
@@ -2619,17 +2628,14 @@ fn create_indexer(
     descriptor: ExtendedDescriptor,
     change_descriptor: Option<ExtendedDescriptor>,
     lookahead: u32,
+    use_spk_cache: bool,
 ) -> Result<KeychainTxOutIndex<KeychainKind>, DescriptorError> {
-    let mut indexer = KeychainTxOutIndex::<KeychainKind>::new(lookahead);
+    let mut indexer = KeychainTxOutIndex::<KeychainKind>::new(lookahead, use_spk_cache);
 
-    // let (descriptor, keymap) = descriptor;
-    // let signers = Arc::new(SignersContainer::build(keymap, &descriptor, secp));
     assert!(indexer
         .insert_descriptor(KeychainKind::External, descriptor)
         .expect("first descriptor introduced must succeed"));
 
-    // let (descriptor, keymap) = change_descriptor;
-    // let change_signers = Arc::new(SignersContainer::build(keymap, &descriptor, secp));
     if let Some(change_descriptor) = change_descriptor {
         assert!(indexer
             .insert_descriptor(KeychainKind::Internal, change_descriptor)
