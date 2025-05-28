@@ -1593,13 +1593,12 @@ impl Wallet {
 
         // recording changes to the change keychain
         if let (Excess::Change { .. }, Some((keychain, index))) = (excess, drain_index) {
-            let (_, index_changeset) = self
-                .indexed_graph
-                .index
-                .reveal_to_target(keychain, index)
-                .expect("must not be None");
-            self.stage.merge(index_changeset.into());
-            self.mark_used(keychain, index);
+            if let Some((_, index_changeset)) =
+                self.indexed_graph.index.reveal_to_target(keychain, index)
+            {
+                self.stage.merge(index_changeset.into());
+                self.mark_used(keychain, index);
+            }
         }
 
         Ok(psbt)
