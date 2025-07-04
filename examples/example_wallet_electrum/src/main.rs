@@ -113,7 +113,7 @@ fn main() -> Result<(), anyhow::Error> {
                 (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
             let progress_percent = progress_percent.round() as u32;
             if progress_percent.is_multiple_of(5) && progress_percent > last_printed {
-                print!("{}% ", progress_percent);
+                print!("{progress_percent}% ");
                 std::io::stdout().flush().expect("must flush");
                 last_printed = progress_percent;
             }
