@@ -346,7 +346,6 @@ fn single_descriptor_wallet_persist_and_recover() {
     // should error on wrong internal params
     let desc = get_test_wpkh();
     let (exp_desc, _) = <Descriptor<DescriptorPublicKey>>::parse_descriptor(secp, desc).unwrap();
-    let exp_desc = Box::new(exp_desc);
     let err = Wallet::load()
         .descriptor(KeychainKind::Internal, Some(desc))
         .extract_keys()
