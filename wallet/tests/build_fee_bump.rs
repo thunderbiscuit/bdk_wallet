@@ -79,7 +79,7 @@ fn test_bump_fee_low_fee_rate() {
 
     let required = feerate.to_sat_per_kwu() + 250; // +1 sat/vb
     let sat_vb = required as f64 / 250.0;
-    let expect = format!("Fee rate too low: required {} sat/vb", sat_vb);
+    let expect = format!("Fee rate too low: required {sat_vb} sat/vb");
     assert_eq!(res.unwrap_err().to_string(), expect);
 }
 
@@ -178,7 +178,7 @@ fn test_bump_fee_reduce_change() {
 
     assert_eq!(sent, original_sent_received.0);
     assert_eq!(received + fee, original_sent_received.1 + original_fee);
-    assert!(fee > original_fee, "{} > {}", fee, original_fee);
+    assert!(fee > original_fee, "{fee} > {original_fee}");
 
     let tx = &psbt.unsigned_tx;
     assert_eq!(tx.output.len(), 2);
@@ -365,7 +365,7 @@ fn test_bump_fee_remove_output_manually_selected_only() {
         ChainPosition::Confirmed { anchor, .. } => {
             insert_anchor(&mut wallet, init_tx.compute_txid(), anchor)
         }
-        other => panic!("all wallet txs must be confirmed: {:?}", other),
+        other => panic!("all wallet txs must be confirmed: {other:?}"),
     }
 
     let outpoint = OutPoint {
@@ -415,7 +415,7 @@ fn test_bump_fee_add_input() {
     insert_tx(&mut wallet, init_tx);
     match pos {
         ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
-        other => panic!("all wallet txs must be confirmed: {:?}", other),
+        other => panic!("all wallet txs must be confirmed: {other:?}"),
     }
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
@@ -851,7 +851,7 @@ fn test_legacy_bump_fee_add_input() {
     insert_tx(&mut wallet, init_tx);
     match pos {
         ChainPosition::Confirmed { anchor, .. } => insert_anchor(&mut wallet, txid, anchor),
-        other => panic!("all wallet txs must be confirmed: {:?}", other),
+        other => panic!("all wallet txs must be confirmed: {other:?}"),
     }
 
     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")

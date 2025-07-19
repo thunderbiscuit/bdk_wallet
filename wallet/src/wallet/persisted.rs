@@ -365,7 +365,7 @@ pub enum CreateWithPersistError<E> {
 impl<E: fmt::Display> fmt::Display for CreateWithPersistError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Persist(err) => write!(f, "{}", err),
+            Self::Persist(err) => write!(f, "{err}"),
             Self::DataAlreadyExists(changeset) => {
                 write!(
                     f,
@@ -412,16 +412,15 @@ fn changeset_info(f: &mut fmt::Formatter<'_>, changeset: &ChangeSet) -> fmt::Res
         0
     };
 
-    writeln!(f, "  Network: {}", network)?;
-    writeln!(f, "  Descriptor Checksum: {}", descriptor_checksum)?;
+    writeln!(f, "  Network: {network}")?;
+    writeln!(f, "  Descriptor Checksum: {descriptor_checksum}")?;
     writeln!(
         f,
-        "  Change Descriptor Checksum: {}",
-        change_descriptor_checksum
+        "  Change Descriptor Checksum: {change_descriptor_checksum}"
     )?;
-    writeln!(f, "  Transaction Count: {}", tx_count)?;
-    writeln!(f, "  Anchor Count: {}", anchor_count)?;
-    writeln!(f, "  Block Count: {}", block_count)?;
+    writeln!(f, "  Transaction Count: {tx_count}")?;
+    writeln!(f, "  Anchor Count: {anchor_count}")?;
+    writeln!(f, "  Block Count: {block_count}")?;
 
     Ok(())
 }

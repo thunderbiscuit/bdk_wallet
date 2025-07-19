@@ -187,10 +187,10 @@ impl fmt::Display for SignerError {
             Self::MissingHdKeypath => write!(f, "Missing fingerprint and derivation path"),
             Self::NonStandardSighash => write!(f, "The psbt contains a non standard sighash"),
             Self::InvalidSighash => write!(f, "Invalid SIGHASH for the signing context in use"),
-            Self::SighashTaproot(err) => write!(f, "Error while computing the hash to sign a Taproot input: {}", err),
-            Self::Psbt(err) => write!(f, "Error computing the sighash: {}", err),
-            Self::MiniscriptPsbt(err) => write!(f, "Miniscript PSBT error: {}", err),
-            Self::External(err) => write!(f, "{}", err),
+            Self::SighashTaproot(err) => write!(f, "Error while computing the hash to sign a Taproot input: {err}"),
+            Self::Psbt(err) => write!(f, "Error computing the sighash: {err}"),
+            Self::MiniscriptPsbt(err) => write!(f, "Miniscript PSBT error: {err}"),
+            Self::External(err) => write!(f, "{err}"),
         }
     }
 }

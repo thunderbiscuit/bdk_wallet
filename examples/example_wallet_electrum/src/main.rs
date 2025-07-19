@@ -39,7 +39,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let address = wallet.next_unused_address(KeychainKind::External);
     wallet.persist(&mut db)?;
-    println!("Generated Address: {}", address);
+    println!("Generated Address: {address}");
 
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());
@@ -56,9 +56,9 @@ fn main() -> Result<(), anyhow::Error> {
         let mut once = HashSet::<KeychainKind>::new();
         move |k, spk_i, _| {
             if once.insert(k) {
-                print!("\nScanning keychain [{:?}]", k);
+                print!("\nScanning keychain [{k:?}]");
             }
-            print!(" {:<3}", spk_i);
+            print!(" {spk_i:<3}");
             stdout.flush().expect("must flush");
         }
     });
@@ -74,10 +74,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!("Wallet balance after syncing: {}", balance.total());
 
     if balance.total() < SEND_AMOUNT {
-        println!(
-            "Please send at least {} to the receiving address",
-            SEND_AMOUNT
-        );
+        println!("Please send at least {SEND_AMOUNT} to the receiving address");
         std::process::exit(0);
     }
 

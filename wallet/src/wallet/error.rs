@@ -33,9 +33,9 @@ pub enum MiniscriptPsbtError {
 impl fmt::Display for MiniscriptPsbtError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Conversion(err) => write!(f, "Conversion error: {}", err),
-            Self::UtxoUpdate(err) => write!(f, "UTXO update error: {}", err),
-            Self::OutputUpdate(err) => write!(f, "Output update error: {}", err),
+            Self::Conversion(err) => write!(f, "Conversion error: {err}"),
+            Self::UtxoUpdate(err) => write!(f, "UTXO update error: {err}"),
+            Self::OutputUpdate(err) => write!(f, "Output update error: {err}"),
         }
     }
 }
@@ -112,7 +112,7 @@ impl fmt::Display for CreateTxError {
             Self::Descriptor(e) => e.fmt(f),
             Self::Policy(e) => e.fmt(f),
             CreateTxError::SpendingPolicyRequired(keychain_kind) => {
-                write!(f, "Spending policy required: {}", keychain_kind)
+                write!(f, "Spending policy required: {keychain_kind}")
             }
             CreateTxError::Version0 => {
                 write!(f, "Invalid version `0`")
@@ -127,13 +127,12 @@ impl fmt::Display for CreateTxError {
                 requested,
                 required,
             } => {
-                write!(f, "TxBuilder requested timelock of `{}`, but at least `{}` is required to spend from this script", requested, required)
+                write!(f, "TxBuilder requested timelock of `{requested}`, but at least `{required}` is required to spend from this script")
             }
             CreateTxError::RbfSequenceCsv { sequence, csv } => {
                 write!(
                     f,
-                    "Cannot enable RBF with nSequence `{}` given a required OP_CSV of `{}`",
-                    sequence, csv
+                    "Cannot enable RBF with nSequence `{sequence}` given a required OP_CSV of `{csv}`"
                 )
             }
             CreateTxError::FeeTooLow { required } => {
@@ -152,7 +151,7 @@ impl fmt::Display for CreateTxError {
                 write!(f, "No UTXO selected")
             }
             CreateTxError::OutputBelowDustLimit(limit) => {
-                write!(f, "Output below the dust limit: {}", limit)
+                write!(f, "Output below the dust limit: {limit}")
             }
             CreateTxError::CoinSelection(e) => e.fmt(f),
             CreateTxError::NoRecipients => {
@@ -160,16 +159,16 @@ impl fmt::Display for CreateTxError {
             }
             CreateTxError::Psbt(e) => e.fmt(f),
             CreateTxError::MissingKeyOrigin(err) => {
-                write!(f, "Missing key origin: {}", err)
+                write!(f, "Missing key origin: {err}")
             }
             CreateTxError::UnknownUtxo => {
                 write!(f, "UTXO not found in the internal database")
             }
             CreateTxError::MissingNonWitnessUtxo(outpoint) => {
-                write!(f, "Missing non_witness_utxo on foreign utxo {}", outpoint)
+                write!(f, "Missing non_witness_utxo on foreign utxo {outpoint}")
             }
             CreateTxError::MiniscriptPsbt(err) => {
-                write!(f, "Miniscript PSBT error: {}", err)
+                write!(f, "Miniscript PSBT error: {err}")
             }
         }
     }
@@ -238,19 +237,18 @@ impl fmt::Display for BuildFeeBumpError {
             Self::TransactionNotFound(txid) => {
                 write!(
                     f,
-                    "Transaction not found in the internal database with txid: {}",
-                    txid
+                    "Transaction not found in the internal database with txid: {txid}"
                 )
             }
             Self::TransactionConfirmed(txid) => {
-                write!(f, "Transaction already confirmed with txid: {}", txid)
+                write!(f, "Transaction already confirmed with txid: {txid}")
             }
             Self::IrreplaceableTransaction(txid) => {
-                write!(f, "Transaction can't be replaced with txid: {}", txid)
+                write!(f, "Transaction can't be replaced with txid: {txid}")
             }
             Self::FeeRateUnavailable => write!(f, "Fee rate unavailable"),
             Self::InvalidOutputIndex(op) => {
-                write!(f, "A txin referenced an invalid output: {}", op)
+                write!(f, "A txin referenced an invalid output: {op}")
             }
         }
     }

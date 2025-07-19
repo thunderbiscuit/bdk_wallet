@@ -250,7 +250,7 @@ where
 {
     let mut map = serializer.serialize_map(Some(input_map.len()))?;
     for (k, v) in input_map {
-        let k_string = format!("{:?}", k);
+        let k_string = format!("{k:?}");
         map.serialize_entry(&k_string, v)?;
     }
     map.end()
@@ -529,8 +529,8 @@ pub enum PolicyError {
 impl fmt::Display for PolicyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotEnoughItemsSelected(err) => write!(f, "Not enough items selected: {}", err),
-            Self::IndexOutOfRange(index) => write!(f, "Index out of range: {}", index),
+            Self::NotEnoughItemsSelected(err) => write!(f, "Not enough items selected: {err}"),
+            Self::IndexOutOfRange(index) => write!(f, "Index out of range: {index}"),
             Self::AddOnLeaf => write!(f, "Add on leaf"),
             Self::AddOnPartialComplete => write!(f, "Add on partial complete"),
             Self::MixedTimelockUnits => write!(f, "Mixed timelock units"),

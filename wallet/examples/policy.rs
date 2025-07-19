@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // But they can be used as independent tools also.
     let (wallet_desc, keymap) = desc.into_wallet_descriptor(&secp, Network::Testnet)?;
 
-    println!("Example Descriptor for policy analysis : {}", wallet_desc);
+    println!("Example Descriptor for policy analysis : {wallet_desc}");
 
     // Create the signer with the keymap and descriptor.
     let signers_container = SignersContainer::build(keymap, &wallet_desc, &secp);
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .extract_policy(&signers_container, BuildSatisfaction::None, &secp)?
         .expect("We expect a policy");
 
-    println!("Derived Policy for the descriptor {:#?}", policy);
+    println!("Derived Policy for the descriptor {policy:#?}");
 
     Ok(())
 }

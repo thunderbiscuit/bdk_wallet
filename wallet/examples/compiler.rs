@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )"
     .replace(&[' ', '\n', '\t'][..], "");
 
-    println!("Compiling policy: \n{}", policy_str);
+    println!("Compiling policy: \n{policy_str}");
 
     // Parse the string as a [`Concrete`] type miniscript policy.
     let policy = Concrete::<String>::from_str(&policy_str)?;
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // `policy.compile()` returns the resulting miniscript from the policy.
     let descriptor = Descriptor::new_wsh(policy.compile()?)?.to_string();
 
-    println!("Compiled into Descriptor: \n{}", descriptor);
+    println!("Compiled into Descriptor: \n{descriptor}");
 
     // Create a new wallet from descriptors
     let mut wallet = Wallet::create_single(descriptor)

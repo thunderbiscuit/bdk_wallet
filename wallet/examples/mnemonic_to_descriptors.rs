@@ -45,8 +45,8 @@ fn main() -> Result<(), anyhow::Error> {
         descriptor!(tr((mnemonic_with_passphrase, internal_path)))?
             .into_wallet_descriptor(&secp, Network::Testnet)?;
 
-    println!("tpub external descriptor: {}", external_descriptor);
-    println!("tpub internal descriptor: {}", internal_descriptor);
+    println!("tpub external descriptor: {external_descriptor}");
+    println!("tpub internal descriptor: {internal_descriptor}");
     println!(
         "tprv external descriptor: {}",
         external_descriptor.to_string_with_secret(&ext_keymap)

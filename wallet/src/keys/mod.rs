@@ -989,9 +989,9 @@ impl fmt::Display for KeyError {
             Self::InvalidScriptContext => write!(f, "Invalid script context"),
             Self::InvalidNetwork => write!(f, "Invalid network"),
             Self::InvalidChecksum => write!(f, "Invalid checksum"),
-            Self::Message(err) => write!(f, "{}", err),
-            Self::Bip32(err) => write!(f, "BIP32 error: {}", err),
-            Self::Miniscript(err) => write!(f, "Miniscript error: {}", err),
+            Self::Message(err) => write!(f, "{err}"),
+            Self::Bip32(err) => write!(f, "BIP32 error: {err}"),
+            Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
         }
     }
 }
