@@ -1,13 +1,11 @@
 use bdk_esplora::{esplora_client, EsploraExt};
 use bdk_wallet::{
-    bitcoin::{Amount, Network, Txid},
+    bitcoin::{Amount, FeeRate, Network},
     file_store::Store,
+    psbt::PsbtUtils,
     KeychainKind, SignOptions, Wallet,
 };
-use std::{
-    collections::{BTreeSet, HashSet},
-    io::Write,
-};
+use std::{collections::BTreeSet, io::Write};
 
 const DB_MAGIC: &str = "bdk_wallet_esplora_example";
 const DB_PATH: &str = "bdk-example-esplora-blocking.db";
@@ -46,7 +44,7 @@ fn main() -> Result<(), anyhow::Error> {
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());
 
-    print!("Syncing...");
+    println!("Full Sync...");
     let client = esplora_client::Builder::new(ESPLORA_URL).build_blocking();
 
     let request = wallet.start_full_scan().inspect({
@@ -56,13 +54,14 @@ fn main() -> Result<(), anyhow::Error> {
             if once.insert(keychain) {
                 print!("\nScanning keychain [{keychain:?}] ");
             }
-            print!(" {spk_i:<3}");
+            if spk_i.is_multiple_of(5) {
+                print!(" {spk_i:<3}");
+            }
             stdout.flush().expect("must flush")
         }
     });
 
     let update = client.full_scan(request, STOP_GAP, PARALLEL_REQUESTS)?;
-
     wallet.apply_update(update)?;
     wallet.persist(&mut db)?;
     println!();
@@ -81,18 +80,14 @@ fn main() -> Result<(), anyhow::Error> {
     let mut psbt = tx_builder.finish()?;
     let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
     assert!(finalized);
-
+    let original_fee = psbt.fee_amount().unwrap();
+    let tx_feerate = psbt.fee_rate().unwrap();
     let tx = psbt.extract_tx()?;
     client.broadcast(&tx)?;
-    println!("Tx broadcasted! Txid: {}", tx.compute_txid());
+    let txid = tx.compute_txid();
+    println!("Tx broadcasted! Txid: {txid}");
 
-    let unconfirmed_txids: HashSet<Txid> = wallet
-        .transactions()
-        .filter(|tx| tx.chain_position.is_unconfirmed())
-        .map(|tx| tx.tx_node.txid)
-        .collect();
-
-    println!("\n=== Performing Partial Sync ===\n");
+    println!("Partial Sync...");
     print!("SCANNING: ");
     let mut printed = 0;
     let sync_request = wallet
@@ -108,31 +103,55 @@ fn main() -> Result<(), anyhow::Error> {
             }
         });
     let sync_update = client.sync(sync_request, PARALLEL_REQUESTS)?;
+
+    wallet.apply_update(sync_update)?;
+    wallet.persist(&mut db)?;
+    println!();
+
+    let feerate = FeeRate::from_sat_per_kwu(tx_feerate.to_sat_per_kwu() + 200);
+    let mut builder = wallet.build_fee_bump(txid).unwrap();
+    builder.fee_rate(feerate);
+    let mut new_psbt = builder.finish().unwrap();
+    let finalize_tx = wallet.sign(&mut new_psbt, SignOptions::default())?;
+    assert!(finalize_tx);
+    let new_fee = new_psbt.fee_amount().unwrap();
+    let bumped_tx = new_psbt.extract_tx()?;
+    assert_eq!(
+        bumped_tx
+            .output
+            .iter()
+            .find(|txout| txout.script_pubkey == address.script_pubkey())
+            .unwrap()
+            .value,
+        SEND_AMOUNT,
+        "Outputs should remain the same"
+    );
+    assert!(
+        new_fee > original_fee,
+        "Replacement tx fee ({new_fee}) should be higher than original ({original_fee})",
+    );
+    client.broadcast(&bumped_tx)?;
+    println!(
+        "Broadcast replacement transaction. Txid: {}",
+        bumped_tx.compute_txid()
+    );
+
+    println!("Syncing after bumped tx...");
+    let sync_request = wallet.start_sync_with_revealed_spks().inspect(|_, _| {});
+    let sync_update = client.sync(sync_request, PARALLEL_REQUESTS)?;
     println!();
 
     let mut evicted_txs = Vec::new();
-    for txid in unconfirmed_txids {
-        let tx_node = wallet
-            .tx_graph()
-            .full_txs()
-            .find(|full_tx| full_tx.txid == txid);
-        let wallet_tx = wallet.get_tx(txid);
-
-        let is_evicted = match wallet_tx {
-            Some(wallet_tx) => {
-                !wallet_tx.chain_position.is_unconfirmed()
-                    && !wallet_tx.chain_position.is_confirmed()
-            }
-            None => true,
-        };
-
-        if is_evicted {
-            if let Some(full_tx) = tx_node {
-                evicted_txs.push((full_tx.txid, full_tx.last_seen.unwrap_or(0)));
-            } else {
-                evicted_txs.push((txid, 0));
-            }
-        }
+    let last_seen = wallet
+        .tx_graph()
+        .full_txs()
+        .find(|full_tx| full_tx.txid == txid)
+        .map_or(0, |full_tx| full_tx.last_seen.unwrap_or(0));
+    if !evicted_txs
+        .iter()
+        .any(|(evicted_txid, _)| evicted_txid == &txid)
+    {
+        evicted_txs.push((txid, last_seen));
     }
 
     if !evicted_txs.is_empty() {
@@ -147,7 +166,7 @@ fn main() -> Result<(), anyhow::Error> {
     let balance_after_sync = wallet.balance();
     println!("Wallet balance after sync: {}", balance_after_sync.total());
     println!(
-        "Wallet has {} transactions and {} utxos after partial sync",
+        "Wallet has {} transactions and {} utxos",
         wallet.transactions().count(),
         wallet.list_unspent().count()
     );

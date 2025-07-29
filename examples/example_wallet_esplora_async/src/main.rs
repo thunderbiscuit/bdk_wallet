@@ -1,14 +1,12 @@
 use anyhow::Ok;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{
-    bitcoin::{Amount, Network, Txid},
+    bitcoin::{Amount, FeeRate, Network},
+    psbt::PsbtUtils,
     rusqlite::Connection,
     KeychainKind, SignOptions, Wallet,
 };
-use std::{
-    collections::{BTreeSet, HashSet},
-    io::Write,
-};
+use std::{collections::BTreeSet, io::Write};
 
 const SEND_AMOUNT: Amount = Amount::from_sat(5000);
 const STOP_GAP: usize = 5;
@@ -23,7 +21,6 @@ const ESPLORA_URL: &str = "http://signet.bitcoindevkit.net";
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let mut conn = Connection::open(DB_PATH)?;
-
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
         .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
@@ -39,12 +36,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let address = wallet.next_unused_address(KeychainKind::External);
     wallet.persist(&mut conn)?;
-    println!("Next unused address: ({}) {}", address.index, address);
+    println!("Next unused address: ({}) {address}", address.index);
 
     let balance = wallet.balance();
     println!("Wallet balance before syncing: {}", balance.total());
 
-    println!("=== Performing Full Sync ===");
+    println!("Full Sync...");
     let client = esplora_client::Builder::new(ESPLORA_URL).build_async()?;
 
     let request = wallet.start_full_scan().inspect({
@@ -54,7 +51,9 @@ async fn main() -> Result<(), anyhow::Error> {
             if once.insert(keychain) {
                 print!("\nScanning keychain [{keychain:?}]");
             }
-            print!(" {spk_i:<3}");
+            if spk_i.is_multiple_of(5) {
+                print!(" {spk_i:<3}");
+            }
             stdout.flush().expect("must flush")
         }
     });
@@ -79,27 +78,22 @@ async fn main() -> Result<(), anyhow::Error> {
         println!("Please send at least {SEND_AMOUNT} to the receiving address");
         std::process::exit(0);
     }
-
     let mut tx_builder = wallet.build_tx();
     tx_builder.add_recipient(address.script_pubkey(), SEND_AMOUNT);
 
     let mut psbt = tx_builder.finish()?;
     let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
     assert!(finalized);
-
+    let original_fee = psbt.fee_amount().unwrap();
+    let tx_feerate = psbt.fee_rate().unwrap();
     let tx = psbt.extract_tx()?;
     client.broadcast(&tx).await?;
-    println!("Tx broadcasted! Txid: {}", tx.compute_txid());
+    let txid = tx.compute_txid();
+    println!("Tx broadcasted! Txid: {txid}");
 
-    let unconfirmed_txids: HashSet<Txid> = wallet
-        .transactions()
-        .filter(|tx| tx.chain_position.is_unconfirmed())
-        .map(|tx| tx.tx_node.txid)
-        .collect();
-
-    println!("\n=== Performing Partial Sync ===\n");
+    println!("Partial Sync...");
     print!("SCANNING: ");
-    let mut printed = 0;
+    let mut printed: u32 = 0;
     let sync_request = wallet
         .start_sync_with_revealed_spks()
         .inspect(move |_, sync_progress| {
@@ -114,30 +108,63 @@ async fn main() -> Result<(), anyhow::Error> {
         });
     let sync_update = client.sync(sync_request, PARALLEL_REQUESTS).await?;
     println!();
+    wallet.apply_update(sync_update)?;
+    wallet.persist(&mut conn)?;
+
+    let feerate = FeeRate::from_sat_per_kwu(tx_feerate.to_sat_per_kwu() + 250);
+    let mut builder = wallet.build_fee_bump(txid).expect("failed to bump tx");
+    builder.fee_rate(feerate);
+    let mut bumped_psbt = builder.finish().unwrap();
+    let finalize_btx = wallet.sign(&mut bumped_psbt, SignOptions::default())?;
+    assert!(finalize_btx);
+    let new_fee = bumped_psbt.fee_amount().unwrap();
+    let bumped_tx = bumped_psbt.extract_tx()?;
+    assert_eq!(
+        bumped_tx
+            .output
+            .iter()
+            .find(|txout| txout.script_pubkey == address.script_pubkey())
+            .unwrap()
+            .value,
+        SEND_AMOUNT,
+        "Outputs should be the same"
+    );
+    assert!(
+        new_fee > original_fee,
+        "New fee ({new_fee}) should be higher than original ({original_fee})",
+    );
+    client.broadcast(&bumped_tx).await?;
+    println!("Broadcasted bumped tx. Txid: {}", bumped_tx.compute_txid());
+
+    println!("syncing after broadcasting bumped tx...");
+    print!("SCANNING: ");
+    let sync_request = wallet
+        .start_sync_with_revealed_spks()
+        .inspect(move |_, sync_progress| {
+            let progress_percent =
+                (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
+            let progress_percent = progress_percent.round() as u32;
+            if progress_percent.is_multiple_of(10) && progress_percent > printed {
+                print!("{progress_percent}% ");
+                std::io::stdout().flush().expect("must flush");
+                printed = progress_percent;
+            }
+        });
+    let sync_update = client.sync(sync_request, PARALLEL_REQUESTS).await?;
+    println!();
 
     let mut evicted_txs = Vec::new();
-    for txid in unconfirmed_txids {
-        let tx_node = wallet
-            .tx_graph()
-            .full_txs()
-            .find(|full_tx| full_tx.txid == txid);
-        let wallet_tx = wallet.get_tx(txid);
 
-        let is_evicted = match wallet_tx {
-            Some(wallet_tx) => {
-                !wallet_tx.chain_position.is_unconfirmed()
-                    && !wallet_tx.chain_position.is_confirmed()
-            }
-            None => true,
-        };
-
-        if is_evicted {
-            if let Some(full_tx) = tx_node {
-                evicted_txs.push((full_tx.txid, full_tx.last_seen.unwrap_or(0)));
-            } else {
-                evicted_txs.push((txid, 0));
-            }
-        }
+    let last_seen = wallet
+        .tx_graph()
+        .full_txs()
+        .find(|full_tx| full_tx.txid == txid)
+        .map_or(0, |full_tx| full_tx.last_seen.unwrap_or(0));
+    if !evicted_txs
+        .iter()
+        .any(|(evicted_txid, _)| evicted_txid == &txid)
+    {
+        evicted_txs.push((txid, last_seen));
     }
 
     if !evicted_txs.is_empty() {
