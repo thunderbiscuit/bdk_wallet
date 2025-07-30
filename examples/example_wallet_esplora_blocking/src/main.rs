@@ -1,26 +1,26 @@
 use bdk_esplora::{esplora_client, EsploraExt};
+use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
-    file_store::Store,
     psbt::PsbtUtils,
     KeychainKind, SignOptions, Wallet,
 };
+use std::thread::sleep;
+use std::time::Duration;
 use std::{collections::BTreeSet, io::Write};
 
-const DB_MAGIC: &str = "bdk_wallet_esplora_example";
-const DB_PATH: &str = "bdk-example-esplora-blocking.db";
 const SEND_AMOUNT: Amount = Amount::from_sat(5000);
 const STOP_GAP: usize = 5;
 const PARALLEL_REQUESTS: usize = 5;
 
-const NETWORK: Network = Network::Signet;
+const DB_PATH: &str = "bdk-example-esplora-blocking.sqlite";
+const NETWORK: Network = Network::Testnet4;
 const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
 const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
-const ESPLORA_URL: &str = "http://signet.bitcoindevkit.net";
+const ESPLORA_URL: &str = "https://mempool.space/testnet4/api";
 
 fn main() -> Result<(), anyhow::Error> {
-    let (mut db, _) = Store::<bdk_wallet::ChangeSet>::load_or_create(DB_MAGIC.as_bytes(), DB_PATH)?;
-
+    let mut db = Connection::open(DB_PATH)?;
     let wallet_opt = Wallet::load()
         .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
         .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
@@ -74,8 +74,10 @@ fn main() -> Result<(), anyhow::Error> {
         std::process::exit(0);
     }
 
+    let target_fee_rate = FeeRate::from_sat_per_vb(1).unwrap();
     let mut tx_builder = wallet.build_tx();
     tx_builder.add_recipient(address.script_pubkey(), SEND_AMOUNT);
+    tx_builder.fee_rate(target_fee_rate);
 
     let mut psbt = tx_builder.finish()?;
     let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
@@ -85,7 +87,7 @@ fn main() -> Result<(), anyhow::Error> {
     let tx = psbt.extract_tx()?;
     client.broadcast(&tx)?;
     let txid = tx.compute_txid();
-    println!("Tx broadcasted! Txid: {txid}");
+    println!("Tx broadcasted! Txid: https://mempool.space/testnet4/tx/{txid}");
 
     println!("Partial Sync...");
     print!("SCANNING: ");
@@ -108,7 +110,8 @@ fn main() -> Result<(), anyhow::Error> {
     wallet.persist(&mut db)?;
     println!();
 
-    let feerate = FeeRate::from_sat_per_kwu(tx_feerate.to_sat_per_kwu() + 200);
+    // bump fee rate for tx by at least 1 sat per vbyte
+    let feerate = FeeRate::from_sat_per_vb(tx_feerate.to_sat_per_vb_ceil() + 1).unwrap();
     let mut builder = wallet.build_fee_bump(txid).unwrap();
     builder.fee_rate(feerate);
     let mut new_psbt = builder.finish().unwrap();
@@ -130,9 +133,12 @@ fn main() -> Result<(), anyhow::Error> {
         new_fee > original_fee,
         "Replacement tx fee ({new_fee}) should be higher than original ({original_fee})",
     );
+
+    // wait for first transaction to make it into the mempool and be indexed on mempool.space
+    sleep(Duration::from_secs(10));
     client.broadcast(&bumped_tx)?;
     println!(
-        "Broadcast replacement transaction. Txid: {}",
+        "Broadcast replacement transaction. Txid: https://mempool.space/testnet4/tx/{}",
         bumped_tx.compute_txid()
     );
 
@@ -142,25 +148,14 @@ fn main() -> Result<(), anyhow::Error> {
     println!();
 
     let mut evicted_txs = Vec::new();
-    let last_seen = wallet
-        .tx_graph()
-        .full_txs()
-        .find(|full_tx| full_tx.txid == txid)
-        .map_or(0, |full_tx| full_tx.last_seen.unwrap_or(0));
-    if !evicted_txs
-        .iter()
-        .any(|(evicted_txid, _)| evicted_txid == &txid)
-    {
-        evicted_txs.push((txid, last_seen));
-    }
-
-    if !evicted_txs.is_empty() {
-        let evicted_count = evicted_txs.len();
-        wallet.apply_evicted_txs(evicted_txs);
-        println!("Applied {evicted_count} evicted transactions");
+    for (txid, last_seen) in &sync_update.tx_update.evicted_ats {
+        evicted_txs.push((*txid, *last_seen));
     }
 
     wallet.apply_update(sync_update)?;
+    if !evicted_txs.is_empty() {
+        println!("Applied {} evicted transactions", evicted_txs.len());
+    }
     wallet.persist(&mut db)?;
 
     let balance_after_sync = wallet.balance();
