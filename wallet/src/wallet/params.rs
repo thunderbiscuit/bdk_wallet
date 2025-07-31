@@ -28,7 +28,7 @@ where
 
         let descriptors = desc
             .into_single_descriptors()
-            .map_err(|_| DescriptorError::MultiPath)?;
+            .map_err(DescriptorError::Miniscript)?;
 
         if descriptors.len() != 2 {
             return Err(DescriptorError::MultiPath);
