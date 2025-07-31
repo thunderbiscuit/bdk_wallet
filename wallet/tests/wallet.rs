@@ -34,8 +34,7 @@ fn test_error_external_and_internal_are_the_same() {
         .create_wallet_no_persist();
     assert!(
         matches!(&err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
-        "expected same descriptors error, got {:?}",
-        err,
+        "expected same descriptors error, got {err:?}",
     );
 
     // public + private of same descriptor should fail to create wallet
@@ -46,8 +45,7 @@ fn test_error_external_and_internal_are_the_same() {
         .create_wallet_no_persist();
     assert!(
         matches!(err, Err(DescriptorError::ExternalAndInternalAreTheSame)),
-        "expected same descriptors error, got {:?}",
-        err,
+        "expected same descriptors error, got {err:?}",
     );
 }
 

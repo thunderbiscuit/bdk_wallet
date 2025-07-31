@@ -167,7 +167,7 @@ fn test_psbt_multiple_internalkey_signers() {
 
     let secp = Secp256k1::new();
     let wif = "cNJmN3fH9DDbDt131fQNkVakkpzawJBSeybCUNmP1BovpmGQ45xG";
-    let desc = format!("tr({})", wif);
+    let desc = format!("tr({wif})");
     let prv = PrivateKey::from_wif(wif).unwrap();
     let keypair = Keypair::from_secret_key(&secp, &prv.inner);
 

@@ -783,8 +783,7 @@ mod test {
     fn foreign_utxo(value: Amount, index: u32) -> WeightedUtxo {
         assert!(index < 10);
         let outpoint = OutPoint::from_str(&format!(
-            "000000000000000000000000000000000000000000000000000000000000000{}:0",
-            index
+            "000000000000000000000000000000000000000000000000000000000000000{index}:0"
         ))
         .unwrap();
         WeightedUtxo {
@@ -811,8 +810,7 @@ mod test {
     ) -> WeightedUtxo {
         assert!(index < 10);
         let outpoint = OutPoint::from_str(&format!(
-            "000000000000000000000000000000000000000000000000000000000000000{}:0",
-            index
+            "000000000000000000000000000000000000000000000000000000000000000{index}:0"
         ))
         .unwrap();
         WeightedUtxo {
@@ -854,8 +852,7 @@ mod test {
                 satisfaction_weight: Weight::from_wu_usize(P2WPKH_SATISFACTION_SIZE),
                 utxo: Utxo::Local(LocalOutput {
                     outpoint: OutPoint::from_str(&format!(
-                        "ebd9813ecebc57ff8f30797de7c205e3c7498ca950ea4341ee51a685ff2fa30a:{}",
-                        i
+                        "ebd9813ecebc57ff8f30797de7c205e3c7498ca950ea4341ee51a685ff2fa30a:{i}"
                     ))
                     .unwrap(),
                     txout: TxOut {
@@ -894,8 +891,7 @@ mod test {
                 satisfaction_weight: Weight::from_wu_usize(P2WPKH_SATISFACTION_SIZE),
                 utxo: Utxo::Local(LocalOutput {
                     outpoint: OutPoint::from_str(&format!(
-                        "ebd9813ecebc57ff8f30797de7c205e3c7498ca950ea4341ee51a685ff2fa30a:{}",
-                        i
+                        "ebd9813ecebc57ff8f30797de7c205e3c7498ca950ea4341ee51a685ff2fa30a:{i}"
                     ))
                     .unwrap(),
                     txout: TxOut {

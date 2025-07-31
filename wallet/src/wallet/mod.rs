@@ -237,17 +237,12 @@ impl fmt::Display for LoadMismatch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadMismatch::Network { loaded, expected } => {
-                write!(
-                    f,
-                    "Network mismatch: loaded {}, expected {}",
-                    loaded, expected
-                )
+                write!(f, "Network mismatch: loaded {loaded}, expected {expected}")
             }
             LoadMismatch::Genesis { loaded, expected } => {
                 write!(
                     f,
-                    "Genesis hash mismatch: loaded {}, expected {}",
-                    loaded, expected
+                    "Genesis hash mismatch: loaded {loaded}, expected {expected}"
                 )
             }
             LoadMismatch::Descriptor {
@@ -306,8 +301,7 @@ impl fmt::Display for ApplyBlockError {
                 connected_to_hash: checkpoint_hash,
             } => write!(
                 f,
-                "`connected_to` hash {} differs from the expected hash {} (which is derived from `block`)",
-                checkpoint_hash, block_hash
+                "`connected_to` hash {checkpoint_hash} differs from the expected hash {block_hash} (which is derived from `block`)"
             ),
         }
     }

@@ -7,6 +7,7 @@
 )]
 #![no_std]
 #![warn(missing_docs)]
+#![allow(clippy::uninlined_format_args)]
 
 #[cfg(feature = "std")]
 #[macro_use]
