@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Context;
 use assert_matches::assert_matches;
+use bdk_chain::DescriptorId;
 use bdk_chain::{
     keychain_txout::DEFAULT_LOOKAHEAD, ChainPosition, ConfirmationBlockTime, DescriptorExt,
 };
@@ -14,7 +15,9 @@ use bdk_wallet::{
 use bitcoin::constants::ChainHash;
 use bitcoin::hashes::Hash;
 use bitcoin::key::Secp256k1;
-use bitcoin::{absolute, transaction, Amount, BlockHash, Network, ScriptBuf, Transaction, TxOut};
+use bitcoin::{
+    absolute, secp256k1, transaction, Amount, BlockHash, Network, ScriptBuf, Transaction, TxOut,
+};
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 mod common;
@@ -24,6 +27,57 @@ const DB_MAGIC: &[u8] = &[0x21, 0x24, 0x48];
 
 #[test]
 fn wallet_is_persisted() -> anyhow::Result<()> {
+    type SpkCacheChangeSet = BTreeMap<DescriptorId, BTreeMap<u32, ScriptBuf>>;
+
+    /// Check whether the spk-cache field of the changeset contains the expected spk indices.
+    fn check_cache_cs(
+        cache_cs: &SpkCacheChangeSet,
+        expected: impl IntoIterator<Item = (KeychainKind, impl IntoIterator<Item = u32>)>,
+        msg: impl AsRef<str>,
+    ) {
+        let secp = secp256k1::Secp256k1::new();
+        let (external, internal) = get_test_tr_single_sig_xprv_and_change_desc();
+        let (external_desc, _) = external
+            .into_wallet_descriptor(&secp, Network::Testnet)
+            .unwrap();
+        let (internal_desc, _) = internal
+            .into_wallet_descriptor(&secp, Network::Testnet)
+            .unwrap();
+        let external_did = external_desc.descriptor_id();
+        let internal_did = internal_desc.descriptor_id();
+
+        let cache_cmp = cache_cs
+            .iter()
+            .map(|(did, spks)| {
+                let kind: KeychainKind;
+                if did == &external_did {
+                    kind = KeychainKind::External;
+                } else if did == &internal_did {
+                    kind = KeychainKind::Internal;
+                } else {
+                    unreachable!();
+                }
+                let spk_indices = spks.keys().copied().collect::<BTreeSet<u32>>();
+                (kind, spk_indices)
+            })
+            .filter(|(_, spk_indices)| !spk_indices.is_empty())
+            .collect::<BTreeMap<KeychainKind, BTreeSet<u32>>>();
+
+        let expected_cmp = expected
+            .into_iter()
+            .map(|(kind, indices)| (kind, indices.into_iter().collect::<BTreeSet<u32>>()))
+            .filter(|(_, spk_indices)| !spk_indices.is_empty())
+            .collect::<BTreeMap<KeychainKind, BTreeSet<u32>>>();
+
+        assert_eq!(cache_cmp, expected_cmp, "{}", msg.as_ref());
+    }
+
+    fn staged_cache(wallet: &Wallet) -> SpkCacheChangeSet {
+        wallet.staged().map_or(SpkCacheChangeSet::default(), |cs| {
+            cs.indexer.spk_cache.clone()
+        })
+    }
+
     fn run<Db, CreateDb, OpenDb>(
         filename: &str,
         create_db: CreateDb,
@@ -46,7 +100,17 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
                 .network(Network::Testnet)
                 .use_spk_cache(true)
                 .create_wallet(&mut db)?;
+
             wallet.reveal_next_address(KeychainKind::External);
+
+            check_cache_cs(
+                &staged_cache(&wallet),
+                [
+                    (KeychainKind::External, 0..DEFAULT_LOOKAHEAD + 1),
+                    (KeychainKind::Internal, 0..DEFAULT_LOOKAHEAD),
+                ],
+                "cache cs must return initial set + the external index that was just derived",
+            );
 
             // persist new wallet changes
             assert!(wallet.persist(&mut db)?, "must write");
@@ -81,6 +145,7 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
                     .0
             );
         }
+
         // Test SPK cache
         {
             let mut db = open_db(&file_path).context("failed to recover db")?;
@@ -90,35 +155,32 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
                 .load_wallet(&mut db)?
                 .expect("wallet must exist");
 
-            let external_did = wallet
-                .public_descriptor(KeychainKind::External)
-                .descriptor_id();
-            let internal_did = wallet
-                .public_descriptor(KeychainKind::Internal)
-                .descriptor_id();
-
             assert!(wallet.staged().is_none());
 
-            let _addr = wallet.reveal_next_address(KeychainKind::External);
-            let cs = wallet.staged().expect("we should have staged a changeset");
-            assert!(!cs.indexer.spk_cache.is_empty(), "failed to cache spks");
-            assert_eq!(cs.indexer.spk_cache.len(), 2, "we persisted two keychains");
-            let spk_cache: &BTreeMap<u32, ScriptBuf> =
-                cs.indexer.spk_cache.get(&external_did).unwrap();
-            assert_eq!(spk_cache.len() as u32, 1 + 1 + DEFAULT_LOOKAHEAD);
-            assert_eq!(spk_cache.keys().last(), Some(&26));
-            let spk_cache = cs.indexer.spk_cache.get(&internal_did).unwrap();
-            assert_eq!(spk_cache.len() as u32, DEFAULT_LOOKAHEAD);
-            assert_eq!(spk_cache.keys().last(), Some(&24));
+            let revealed_external_addr = wallet.reveal_next_address(KeychainKind::External);
+            check_cache_cs(
+                &staged_cache(&wallet),
+                [(
+                    KeychainKind::External,
+                    [revealed_external_addr.index + DEFAULT_LOOKAHEAD],
+                )],
+                "must only persist the revealed+LOOKAHEAD indexed external spk",
+            );
+
             // Clear the stage
             let _ = wallet.take_staged();
-            let _addr = wallet.reveal_next_address(KeychainKind::Internal);
-            let cs = wallet.staged().unwrap();
-            assert_eq!(cs.indexer.spk_cache.len(), 1);
-            let spk_cache = cs.indexer.spk_cache.get(&internal_did).unwrap();
-            assert_eq!(spk_cache.len(), 1);
-            assert_eq!(spk_cache.keys().next(), Some(&25));
+
+            let revealed_internal_addr = wallet.reveal_next_address(KeychainKind::Internal);
+            check_cache_cs(
+                &staged_cache(&wallet),
+                [(
+                    KeychainKind::Internal,
+                    [revealed_internal_addr.index + DEFAULT_LOOKAHEAD],
+                )],
+                "must only persist the revealed+LOOKAHEAD indexed internal spk",
+            );
         }
+
         // SPK cache requires load params
         {
             let mut db = open_db(&file_path).context("failed to recover db")?;
