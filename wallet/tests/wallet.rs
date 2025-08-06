@@ -2483,12 +2483,23 @@ fn test_spend_coinbase() {
         }],
     };
     let txid = coinbase_tx.compute_txid();
-    insert_tx(&mut wallet, coinbase_tx);
+
     let anchor = ConfirmationBlockTime {
         block_id: confirmation_block_id,
         confirmation_time: 30_000,
     };
-    insert_anchor(&mut wallet, txid, anchor);
+
+    // Insert coinbase transaction into the local view, and also simulates confirming tx by applying
+    // the update with an `anchor`.
+    let mut tx_update = bdk_chain::TxUpdate::default();
+    tx_update.txs = vec![Arc::new(coinbase_tx)];
+    tx_update.anchors = [(anchor, txid)].into();
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .unwrap();
 
     // NOTE: A transaction spending an output coming from the coinbase tx at height h, is eligible
     // to be included in block h + [100 = COINBASE_MATURITY] or higher.
