@@ -7,6 +7,33 @@ Contributors do not need to change this file but do need to add changelog detail
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [wallet-2.1.0]
+
+### Added
+
+- feat: add justfile #268
+- feat(tx_builder): add `TxBuilder::exclude_unconfirmed` and `TxBuilder::exclude_below_confirmations` #258
+- feat(wallet): `Wallet::create_multipath()` method for creating wallets from BIP 389 multipath descriptors #275
+- feat(wallet): `CreateParams::new_multipath()` for multipath descriptor parameter creation #275
+- feat(wallet): Support for 2-path multipath descriptors with automatic receive/change separation #275
+- feat(wallet): Enhanced validation for multipath descriptors with descriptive error messages #275
+
+### Fixed
+
+- fix(coin_selection): prefer `Utxo::Local` over `Utxo::Foreign` in `OldestFirstCoinSelection` #265
+- fix(tx_builder): preserve insertion order with `TxOrdering::Untouched` #262
+- fix(wallet): Recovering from spk-cache now works properly #288
+
+### Changed
+
+- ci: automated update to rustc 1.87.0 #242
+- deps: bump `bitcoin` to 0.32.6 #266
+- doc(tx_builder): add info about manually selected UTXOs priority #262
+- test: refactor and move wallet tests #199
+- chore(clippy): fix uninlined format args #287
+- docs(wallet): expand docs for `apply_evicted_txs` #270
+- docs(wallet): add sync operation to bdk_wallet examples #274
+
 ## [wallet-2.0.0-beta.0]
 
 ### Added
@@ -1301,3 +1328,5 @@ final transaction is created by calling `finish` on the builder.
 [wallet-1.1.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-1.1.0
 [wallet-1.2.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-1.2.0
 [wallet-2.0.0-beta.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.0.0-beta.0
+[wallet-2.0.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.0.0
+[wallet-2.1.0]: https://github.com/bitcoindevkit/bdk/releases/tag/wallet-2.1.0
