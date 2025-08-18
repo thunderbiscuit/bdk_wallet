@@ -1054,7 +1054,7 @@ impl<Ctx: ScriptContext + 'static> ExtractPolicy for Miniscript<DescriptorPublic
     }
 }
 
-fn psbt_inputs_sat(psbt: &Psbt) -> impl Iterator<Item = PsbtInputSatisfier> {
+fn psbt_inputs_sat(psbt: &Psbt) -> impl Iterator<Item = PsbtInputSatisfier<'_>> {
     (0..psbt.inputs.len()).map(move |i| PsbtInputSatisfier::new(psbt, i))
 }
 
