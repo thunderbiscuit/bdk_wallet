@@ -1,3 +1,5 @@
+//! Utilities for testing custom persistence backends for `bdk_wallet`
+
 use crate::{
     bitcoin::{
         absolute, key::Secp256k1, transaction, Address, Amount, Network, OutPoint, ScriptBuf,
@@ -48,6 +50,14 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
         .script_pubkey()
 }
 
+/// tests if [`Wallet`] is being persisted correctly
+///
+/// [`Wallet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.Wallet.html>
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`], persist it and check if loaded [`ChangeSet`] matches
+/// the persisted one. We then create another such dummy [`ChangeSet`], persist it and load it to
+/// check if merged [`ChangeSet`] is returned.
 pub fn persist_wallet_changeset<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
@@ -202,6 +212,14 @@ where
     assert_eq!(changeset, changeset_read_new);
 }
 
+/// tests if multiple [`Wallet`]s can be persisted in a single file correctly
+///
+/// [`Wallet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.Wallet.html>
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] for first wallet and persist it then we create a dummy
+/// [`ChangeSet`] for second wallet and persist that. Finally we load these two [`ChangeSet`]s and
+/// check if they were persisted correctly.
 pub fn persist_multiple_wallet_changesets<Store, CreateStores>(
     filename: &str,
     create_dbs: CreateStores,
@@ -266,6 +284,13 @@ pub fn persist_multiple_wallet_changesets<Store, CreateStores>(
     assert_eq!(changeset_read, changeset2);
 }
 
+/// tests if [`Network`] is being persisted correctly
+///
+/// [`Network`]: <https://docs.rs/bitcoin/latest/bitcoin/enum.Network.html>
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] with only network field populated, persist it and check if
+/// loaded [`ChangeSet`] has the same [`Network`] as what we persisted.
 pub fn persist_network<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
@@ -296,6 +321,12 @@ where
     assert_eq!(changeset_read.network, Some(Network::Bitcoin));
 }
 
+/// tests if descriptors are being persisted correctly
+///
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] with only descriptor fields populated, persist it and check if
+/// loaded [`ChangeSet`] has the same descriptors as what we persisted.
 pub fn persist_keychains<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
@@ -332,6 +363,12 @@ where
     assert_eq!(changeset_read.change_descriptor.unwrap(), change_descriptor);
 }
 
+/// tests if descriptor(in a single keychain wallet) is being persisted correctly
+///
+/// [`ChangeSet`]: <https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html>
+///
+/// We create a dummy [`ChangeSet`] with only descriptor field populated, persist it and check if
+/// loaded [`ChangeSet`] has the same descriptor as what we persisted.
 pub fn persist_single_keychain<Store, CreateStore>(filename: &str, create_store: CreateStore)
 where
     CreateStore: Fn(&Path) -> anyhow::Result<Store>,
