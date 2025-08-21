@@ -1165,7 +1165,7 @@ impl Wallet {
     /// ```
     ///
     /// [`Anchor`]: bdk_chain::Anchor
-    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx> {
+    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
         let graph = self.indexed_graph.graph();
         graph
             .list_canonical_txs(
@@ -1187,7 +1187,7 @@ impl Wallet {
     ///
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
-    pub fn transactions(&self) -> impl Iterator<Item = WalletTx> + '_ {
+    pub fn transactions<'a>(&'a self) -> impl Iterator<Item = WalletTx<'a>> + 'a {
         let tx_graph = self.indexed_graph.graph();
         let tx_index = &self.indexed_graph.index;
         tx_graph
@@ -1215,7 +1215,7 @@ impl Wallet {
     ///     wallet.transactions_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx>
+    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx<'_>>
     where
         F: FnMut(&WalletTx, &WalletTx) -> Ordering,
     {
