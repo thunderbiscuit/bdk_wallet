@@ -12,7 +12,22 @@ use crate::{
     miniscript::descriptor::{Descriptor, DescriptorPublicKey},
     ChangeSet, WalletPersister,
 };
-use bdk_testenv::{block_id, hash};
+
+macro_rules! block_id {
+    ($height:expr, $hash:literal) => {{
+        bdk_chain::BlockId {
+            height: $height,
+            hash: bitcoin::hashes::Hash::hash($hash.as_bytes()),
+        }
+    }};
+}
+
+macro_rules! hash {
+    ($index:literal) => {{
+        bitcoin::hashes::Hash::hash($index.as_bytes())
+    }};
+}
+
 use std::fmt::Debug;
 use std::path::Path;
 use std::str::FromStr;
