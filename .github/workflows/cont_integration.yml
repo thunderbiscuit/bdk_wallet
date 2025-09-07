@@ -55,8 +55,8 @@ jobs:
         env:
           MATRIX_RUST_VERSION: ${{ matrix.rust.version }}
         run: |
-          cargo build --workspace --exclude 'example_*' ${{ matrix.features }}
-          cargo test --workspace --exclude 'example_*' ${{ matrix.features }}
+          cargo build --workspace ${{ matrix.features }}
+          cargo test --workspace ${{ matrix.features }}
 
   check-no-std:
     needs: prepare
@@ -155,13 +155,6 @@ jobs:
     needs: prepare
     name: Build & Test Examples
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        example-dir:
-          - example_wallet_electrum
-          - example_wallet_esplora_async
-          - example_wallet_esplora_blocking
-          - example_wallet_rpc
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -175,6 +168,6 @@ jobs:
           profile: minimal
       - name: Rust Cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
-      - name: Build
-        working-directory: examples/${{ matrix.example-dir }}
-        run: cargo build
+      - name: Build + Test Examples
+        working-directory: examples
+        run: cargo test --workspace --all-targets --all-features
