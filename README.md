@@ -15,7 +15,7 @@
     <a href="https://github.com/bitcoindevkit/bdk_wallet/actions?query=workflow%3ACI"><img alt="CI Status" src="https://github.com/bitcoindevkit/bdk_wallet/workflows/CI/badge.svg"></a>
     <a href="https://coveralls.io/github/bitcoindevkit/bdk_wallet?branch=master"><img src="https://coveralls.io/repos/github/bitcoindevkit/bdk_wallet/badge.svg?branch=master"/></a>
     <a href="https://docs.rs/bdk_wallet"><img alt="Wallet API Docs" src="https://img.shields.io/badge/docs.rs-bdk_wallet-green"/></a>
-    <a href="https://blog.rust-lang.org/2022/08/11/Rust-1.63.0.html"><img alt="Rustc Version 1.63.0+" src="https://img.shields.io/badge/rustc-1.63.0%2B-lightgrey.svg"/></a>
+    <a href="https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/"><img alt="Rustc Version 1.85.0+" src="https://img.shields.io/badge/rustc-1.85.0%2B-lightgrey.svg"/></a>
     <a href="https://discord.gg/d7NkDKm"><img alt="Chat on Discord" src="https://img.shields.io/discord/753336465005608961?logo=discord"></a>
   </p>
 
@@ -51,9 +51,9 @@ Fully working examples of how to use these components are in `/examples`:
 
 ## Minimum Supported Rust Version (MSRV)
 
-The libraries in this repository maintain a MSRV of 1.63.0.
+The libraries in this repository maintain a MSRV of 1.85.0.
 
-To build with the MSRV of 1.63.0 you will need to pin dependencies by running the [`pin-msrv.sh`](./ci/pin-msrv.sh) script.
+To build with the MSRV of 1.85.0 you may need to pin dependencies by running the [`pin-msrv.sh`](./ci/pin-msrv.sh) script.
 
 ## Just
 
