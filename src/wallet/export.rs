@@ -111,19 +111,20 @@
 //!
 //! let import = CaravanExport::from_str(import)?;
 //! let (external, internal) = import.to_descriptors()?;
-//! # assert!(external.contains("sortedmulti"));
-//! # assert!(internal.contains("sortedmulti"));
+//! # assert_eq!(external, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))#pgthjwtg");
+//! # assert_eq!(internal, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))#cmcnua7a");
 //! # Ok::<_, Box<dyn std::error::Error>>(())
 //! ```
 
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use bitcoin::bip32::{DerivationPath, Fingerprint, Xpub};
 use core::fmt;
 use core::str::FromStr;
 use serde::{Deserialize, Serialize};
 
-use miniscript::descriptor::{ShInner, WshInner};
+use miniscript::descriptor::{DescriptorPublicKey, ShInner, WshInner};
 use miniscript::{Descriptor, ScriptContext, Terminal};
 
 use crate::types::KeychainKind;
@@ -275,17 +276,154 @@ impl FullyNodedExport {
 }
 
 /// ExtendedPublicKey structure for Caravan wallet format
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CaravanExtendedPublicKey {
     /// Name of the signer
     pub name: String,
     /// BIP32 derivation path
-    #[serde(rename = "bip32Path")]
-    pub bip32_path: String,
+    pub bip32_path: DerivationPath,
     /// Extended public key
-    pub xpub: String,
+    pub xpub: Xpub,
     /// Fingerprint of the master key
-    pub xfp: String,
+    pub xfp: Fingerprint,
+}
+
+// Custom serde implementation to maintain JSON compatibility
+impl Serialize for CaravanExtendedPublicKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("CaravanExtendedPublicKey", 4)?;
+        state.serialize_field("name", &self.name)?;
+        // Add m/ prefix for JSON compatibility
+        let path_with_prefix = format!("m/{}", self.bip32_path);
+        state.serialize_field("bip32Path", &path_with_prefix)?;
+        state.serialize_field("xpub", &self.xpub.to_string())?;
+        state.serialize_field("xfp", &self.xfp.to_string())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for CaravanExtendedPublicKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum Field {
+            Name,
+            Bip32Path,
+            Xpub,
+            Xfp,
+        }
+
+        struct CaravanKeyVisitor;
+
+        impl<'de> Visitor<'de> for CaravanKeyVisitor {
+            type Value = CaravanExtendedPublicKey;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct CaravanExtendedPublicKey")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<CaravanExtendedPublicKey, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut name = None;
+                let mut bip32_path = None;
+                let mut xpub = None;
+                let mut xfp = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Name => {
+                            if name.is_some() {
+                                return Err(de::Error::duplicate_field("name"));
+                            }
+                            name = Some(map.next_value()?);
+                        }
+                        Field::Bip32Path => {
+                            if bip32_path.is_some() {
+                                return Err(de::Error::duplicate_field("bip32Path"));
+                            }
+                            let path_str: String = map.next_value()?;
+                            // Strip m/ prefix if present for DerivationPath parsing
+                            let cleaned_path = path_str.strip_prefix("m/").unwrap_or(&path_str);
+                            bip32_path = Some(
+                                DerivationPath::from_str(cleaned_path)
+                                    .map_err(de::Error::custom)?,
+                            );
+                        }
+                        Field::Xpub => {
+                            if xpub.is_some() {
+                                return Err(de::Error::duplicate_field("xpub"));
+                            }
+                            let xpub_str: String = map.next_value()?;
+                            xpub = Some(Xpub::from_str(&xpub_str).map_err(de::Error::custom)?);
+                        }
+                        Field::Xfp => {
+                            if xfp.is_some() {
+                                return Err(de::Error::duplicate_field("xfp"));
+                            }
+                            let xfp_str: String = map.next_value()?;
+                            xfp = Some(Fingerprint::from_str(&xfp_str).map_err(de::Error::custom)?);
+                        }
+                    }
+                }
+
+                Ok(CaravanExtendedPublicKey {
+                    name: name.ok_or_else(|| de::Error::missing_field("name"))?,
+                    bip32_path: bip32_path.ok_or_else(|| de::Error::missing_field("bip32Path"))?,
+                    xpub: xpub.ok_or_else(|| de::Error::missing_field("xpub"))?,
+                    xfp: xfp.ok_or_else(|| de::Error::missing_field("xfp"))?,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["name", "bip32Path", "xpub", "xfp"];
+        deserializer.deserialize_struct("CaravanExtendedPublicKey", FIELDS, CaravanKeyVisitor)
+    }
+}
+
+/// Address type for Caravan wallet format
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CaravanAddressType {
+    /// P2SH multisig
+    #[serde(rename = "P2SH")]
+    P2SH,
+    /// P2WSH multisig (native SegWit)
+    #[serde(rename = "P2WSH")]
+    P2WSH,
+    /// P2SH-P2WSH multisig (nested SegWit)
+    #[serde(rename = "P2SH-P2WSH")]
+    P2SHWrappedP2WSH,
+}
+
+/// Caravan network.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CaravanNetwork {
+    /// mainnet
+    Mainnet,
+    /// testnet
+    Testnet,
+}
+
+use bitcoin::NetworkKind;
+
+impl From<bitcoin::Network> for CaravanNetwork {
+    fn from(network: bitcoin::Network) -> Self {
+        match network.into() {
+            NetworkKind::Main => Self::Mainnet,
+            NetworkKind::Test => Self::Testnet,
+        }
+    }
 }
 
 /// Structure that contains the export of a wallet in Caravan wallet format
@@ -300,9 +438,9 @@ pub struct CaravanExport {
     pub name: String,
     /// Address type (P2SH, P2WSH, P2SH-P2WSH)
     #[serde(rename = "addressType")]
-    pub address_type: String,
+    pub address_type: CaravanAddressType,
     /// Network (mainnet, testnet)
-    pub network: String,
+    pub network: CaravanNetwork,
     /// Client configuration
     pub client: serde_json::Value,
     /// Quorum information
@@ -359,23 +497,17 @@ impl CaravanExport {
         let descriptor_str = remove_checksum(descriptor_str);
 
         // Parse the descriptor to extract required information
-        let descriptor =
-            Descriptor::<String>::from_str(&descriptor_str).map_err(|_| "Invalid descriptor")?;
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_str)
+            .map_err(|_| "Invalid descriptor")?;
 
         // Determine the address type and multisig information
         let (address_type, quorum, keys) = Self::extract_descriptor_info(&descriptor)?;
-
-        // Network
-        let network = match wallet.network() {
-            bitcoin::Network::Bitcoin => "mainnet",
-            _ => "testnet",
-        };
 
         // Create the Caravan export
         let export = CaravanExport {
             name: name.into(),
             address_type,
-            network: network.into(),
+            network: wallet.network().into(),
             client: serde_json::json!({"type": "public"}),
             quorum,
             extended_public_keys: keys,
@@ -387,8 +519,15 @@ impl CaravanExport {
 
     /// Extract information from a descriptor
     fn extract_descriptor_info(
-        descriptor: &Descriptor<String>,
-    ) -> Result<(String, CaravanQuorum, Vec<CaravanExtendedPublicKey>), &'static str> {
+        descriptor: &Descriptor<DescriptorPublicKey>,
+    ) -> Result<
+        (
+            CaravanAddressType,
+            CaravanQuorum,
+            Vec<CaravanExtendedPublicKey>,
+        ),
+        &'static str,
+    > {
         // Extract address type, quorum, and keys based on descriptor type
         match descriptor {
             Descriptor::Sh(sh) => {
@@ -402,7 +541,7 @@ impl CaravanExport {
                                     required_signers: multi.k() as u32,
                                     total_signers: multi.pks().len() as u32,
                                 };
-                                Ok(("P2SH-P2WSH".into(), quorum, keys))
+                                Ok((CaravanAddressType::P2SHWrappedP2WSH, quorum, keys))
                             }
                             _ => Err("Only sortedmulti is supported for P2SH-P2WSH in Caravan"),
                         }
@@ -414,7 +553,7 @@ impl CaravanExport {
                             required_signers: multi.k() as u32,
                             total_signers: multi.pks().len() as u32,
                         };
-                        Ok(("P2SH".into(), quorum, keys))
+                        Ok((CaravanAddressType::P2SH, quorum, keys))
                     }
                     _ => Err("Only sortedmulti is supported for P2SH in Caravan"),
                 }
@@ -428,7 +567,7 @@ impl CaravanExport {
                             required_signers: multi.k() as u32,
                             total_signers: multi.pks().len() as u32,
                         };
-                        Ok(("P2WSH".into(), quorum, keys))
+                        Ok((CaravanAddressType::P2WSH, quorum, keys))
                     }
                     _ => Err("Only sortedmulti is supported for P2WSH in Caravan"),
                 }
@@ -441,111 +580,116 @@ impl CaravanExport {
 
     /// Extract xpubs and fingerprints from multi descriptor
     fn extract_xpubs_from_multi<Ctx: ScriptContext>(
-        multi: &miniscript::descriptor::SortedMultiVec<String, Ctx>,
+        multi: &miniscript::descriptor::SortedMultiVec<DescriptorPublicKey, Ctx>,
     ) -> Result<Vec<CaravanExtendedPublicKey>, &'static str> {
         let mut keys = Vec::new();
 
-        for (i, key) in multi.pks().iter().enumerate() {
-            // Parse the key string to extract origin fingerprint, path, and xpub
-            // Format example: [c258d2e4/48h/0h/0h/2h]xpub.../0/*
-            let key_str = key.clone();
+        for (i, desc_key) in multi.pks().iter().enumerate() {
+            match desc_key {
+                DescriptorPublicKey::XPub(xpub_key) => {
+                    // Extract fingerprint from origin or derive from xpub
+                    let fingerprint = match &xpub_key.origin {
+                        Some((fp, _)) => *fp,
+                        None => {
+                            // If no origin, we need the secp context to derive fingerprint
+                            // This should ideally be passed as a parameter
+                            return Err("Missing origin information for key");
+                        }
+                    };
 
-            // Check if the key has origin information
-            if !key_str.starts_with('[') {
-                return Err("Keys must include origin information for Caravan export");
-            }
+                    // Extract the base derivation path (without the final /0/* or /1/*)
+                    let base_path = if !xpub_key.derivation_path.is_empty() {
+                        // Remove the final derivation step (0 or 1) to get the base path
+                        // Convert to vector, remove last element, then back to DerivationPath
+                        let base_vec: Vec<_> = xpub_key
+                            .derivation_path
+                            .into_iter()
+                            .take(xpub_key.derivation_path.len() - 1)
+                            .cloned()
+                            .collect();
+                        let base: DerivationPath = base_vec.into();
 
-            // Extract origin fingerprint
-            let origin_end = key_str.find(']').ok_or("Invalid key format")?;
-            let origin = &key_str[1..origin_end];
-            let parts: Vec<&str> = origin.split('/').collect();
-            if parts.is_empty() {
-                return Err("Invalid key origin format");
-            }
-
-            let fingerprint = parts[0].to_string();
-
-            // Extract derivation path and convert 'h' to "'"
-            let path_parts: Vec<String> = parts[1..]
-                .iter()
-                .map(|part| {
-                    if part.ends_with('h') {
-                        let p = &part[0..part.len() - 1];
-                        format!("{}'", p)
+                        // Combine with origin path if present
+                        match &xpub_key.origin {
+                            Some((_, origin_path)) => origin_path.extend(&base),
+                            None => base,
+                        }
                     } else {
-                        part.to_string()
-                    }
-                })
-                .collect();
-            let path = format!("m/{}", path_parts.join("/"));
+                        match &xpub_key.origin {
+                            Some((_, origin_path)) => origin_path.clone(),
+                            None => DerivationPath::default(),
+                        }
+                    };
 
-            // Extract xpub
-            let xpub_part = &key_str[origin_end + 1..];
-            let xpub_end = xpub_part.find('/').unwrap_or(xpub_part.len());
-            let xpub = xpub_part[..xpub_end].to_string();
-
-            keys.push(CaravanExtendedPublicKey {
-                name: format!("key{}", i + 1),
-                bip32_path: path,
-                xpub,
-                xfp: fingerprint,
-            });
+                    keys.push(CaravanExtendedPublicKey {
+                        name: format!("key{}", i + 1),
+                        bip32_path: base_path,
+                        xpub: xpub_key.xkey,
+                        xfp: fingerprint,
+                    });
+                }
+                _ => return Err("Only extended public keys are supported"),
+            }
         }
 
         Ok(keys)
     }
 
-    /// Import a wallet from Caravan format
+    /// Import a wallet from Caravan format using proper Descriptor construction
     pub fn to_descriptors(&self) -> Result<(String, String), &'static str> {
         if self.extended_public_keys.is_empty() {
             return Err("No extended public keys found");
         }
 
-        // Build key expressions for the descriptor
-        let mut key_exprs = Vec::new();
-        for key in &self.extended_public_keys {
-            // Remove 'm/' prefix from bip32Path if present
-            let path = if key.bip32_path.starts_with("m/") {
-                &key.bip32_path[2..]
-            } else {
-                &key.bip32_path
-            };
+        // Create DescriptorPublicKey objects for external and internal chains
+        let external_keys: Result<Vec<DescriptorPublicKey>, _> = self
+            .extended_public_keys
+            .iter()
+            .map(|key| {
+                let key_str = format!("[{}/{}]{}/0/*", key.xfp, key.bip32_path, key.xpub);
+                DescriptorPublicKey::from_str(&key_str)
+                    .map_err(|_| "Failed to create DescriptorPublicKey")
+            })
+            .collect();
+        let external_keys = external_keys?;
 
-            // Convert "'" to "h" in the path
-            let descriptor_path = path.replace("'", "h");
+        let internal_keys: Result<Vec<DescriptorPublicKey>, _> = self
+            .extended_public_keys
+            .iter()
+            .map(|key| {
+                let key_str = format!("[{}/{}]{}/1/*", key.xfp, key.bip32_path, key.xpub);
+                DescriptorPublicKey::from_str(&key_str)
+                    .map_err(|_| "Failed to create DescriptorPublicKey")
+            })
+            .collect();
+        let internal_keys = internal_keys?;
 
-            // Format key with origin fingerprint and path
-            let key_expr = format!("[{}/{}]{}/0/*", key.xfp, descriptor_path, key.xpub);
-            key_exprs.push(key_expr);
-        }
+        let k = self.quorum.required_signers as usize;
 
-        // Build descriptor based on address type
-        let descriptor_prefix = match self.address_type.as_str() {
-            "P2SH" => "sh(sortedmulti(",
-            "P2WSH" => "wsh(sortedmulti(",
-            "P2SH-P2WSH" => "sh(wsh(sortedmulti(",
-            _ => return Err("Unsupported address type"),
+        // Use proper Descriptor construction methods
+        let external_desc: Descriptor<DescriptorPublicKey> = match self.address_type {
+            CaravanAddressType::P2SH => Descriptor::new_sh_sortedmulti(k, external_keys)
+                .map_err(|_| "Failed to create P2SH sortedmulti descriptor")?,
+            CaravanAddressType::P2WSH => Descriptor::new_wsh_sortedmulti(k, external_keys)
+                .map_err(|_| "Failed to create P2WSH sortedmulti descriptor")?,
+            CaravanAddressType::P2SHWrappedP2WSH => {
+                Descriptor::new_sh_wsh_sortedmulti(k, external_keys)
+                    .map_err(|_| "Failed to create P2SH-P2WSH sortedmulti descriptor")?
+            }
         };
 
-        let descriptor_suffix = match self.address_type.as_str() {
-            "P2SH" | "P2WSH" => "))",
-            "P2SH-P2WSH" => ")))",
-            _ => return Err("Unsupported address type"),
+        let internal_desc: Descriptor<DescriptorPublicKey> = match self.address_type {
+            CaravanAddressType::P2SH => Descriptor::new_sh_sortedmulti(k, internal_keys)
+                .map_err(|_| "Failed to create P2SH sortedmulti descriptor")?,
+            CaravanAddressType::P2WSH => Descriptor::new_wsh_sortedmulti(k, internal_keys)
+                .map_err(|_| "Failed to create P2WSH sortedmulti descriptor")?,
+            CaravanAddressType::P2SHWrappedP2WSH => {
+                Descriptor::new_sh_wsh_sortedmulti(k, internal_keys)
+                    .map_err(|_| "Failed to create P2SH-P2WSH sortedmulti descriptor")?
+            }
         };
 
-        // Construct the external descriptor
-        let external_descriptor = format!(
-            "{}{},({})){}",
-            descriptor_prefix,
-            self.quorum.required_signers,
-            key_exprs.join(","),
-            descriptor_suffix
-        );
-
-        // Create change descriptor by replacing /0/* with /1/*
-        let change_descriptor = external_descriptor.replace("/0/*", "/1/*");
-
-        Ok((external_descriptor, change_descriptor))
+        Ok((external_desc.to_string(), internal_desc.to_string()))
     }
 }
 
@@ -688,20 +832,32 @@ mod test {
 
         // Check basic fields
         assert_eq!(export.name, "Test P2WSH Wallet");
-        assert_eq!(export.address_type, "P2WSH");
-        assert_eq!(export.network, "mainnet");
+        assert_eq!(export.address_type, CaravanAddressType::P2WSH);
+        assert_eq!(export.network, CaravanNetwork::Mainnet);
         assert_eq!(export.quorum.required_signers, 2);
         assert_eq!(export.quorum.total_signers, 2);
         assert_eq!(export.starting_address_index, 0);
 
         // Check extended public keys
         assert_eq!(export.extended_public_keys.len(), 2);
-        assert_eq!(export.extended_public_keys[0].xfp, "119dbcab");
+        assert_eq!(
+            export.extended_public_keys[0].xfp,
+            Fingerprint::from_str("119dbcab").unwrap()
+        );
 
         // Use the path format with apostrophes in the test expectation
-        assert_eq!(export.extended_public_keys[0].bip32_path, "m/48'/0'/0'/2'");
-        assert_eq!(export.extended_public_keys[1].xfp, "e650dc93");
-        assert_eq!(export.extended_public_keys[1].bip32_path, "m/48'/0'/0'/2'");
+        assert_eq!(
+            export.extended_public_keys[0].bip32_path,
+            DerivationPath::from_str("m/48'/0'/0'/2'").unwrap()
+        );
+        assert_eq!(
+            export.extended_public_keys[1].xfp,
+            Fingerprint::from_str("e650dc93").unwrap()
+        );
+        assert_eq!(
+            export.extended_public_keys[1].bip32_path,
+            DerivationPath::from_str("m/48'/0'/0'/2'").unwrap()
+        );
 
         // Test to_descriptors functionality
         let (external, internal) = export.to_descriptors().unwrap();
@@ -724,7 +880,7 @@ mod test {
         let wallet = get_test_wallet(descriptor, change_descriptor, network);
         let export = CaravanExport::export_wallet(&wallet, "Test P2SH Wallet").unwrap();
 
-        assert_eq!(export.address_type, "P2SH");
+        assert_eq!(export.address_type, CaravanAddressType::P2SH);
         assert_eq!(export.quorum.required_signers, 2);
         assert_eq!(export.quorum.total_signers, 2);
     }
@@ -738,56 +894,33 @@ mod test {
         let wallet = get_test_wallet(descriptor, change_descriptor, network);
         let export = CaravanExport::export_wallet(&wallet, "Test P2SH-P2WSH Wallet").unwrap();
 
-        assert_eq!(export.address_type, "P2SH-P2WSH");
+        assert_eq!(export.address_type, CaravanAddressType::P2SHWrappedP2WSH);
         assert_eq!(export.quorum.required_signers, 2);
         assert_eq!(export.quorum.total_signers, 2);
     }
 
     #[test]
-    fn test_network_detection_for_caravan() {
-        // Test the network detection logic directly
+    fn test_caravan_network_conversion() {
+        // Test CaravanNetwork enum with From<bitcoin::Network> implementation
         assert_eq!(
-            match bitcoin::Network::Bitcoin {
-                bitcoin::Network::Bitcoin => "mainnet",
-                _ => "testnet",
-            },
-            "mainnet"
+            serde_json::to_string(&CaravanNetwork::from(bitcoin::Network::Bitcoin)).unwrap(),
+            "\"mainnet\""
         );
 
         assert_eq!(
-            match bitcoin::Network::Testnet {
-                bitcoin::Network::Bitcoin => "mainnet",
-                _ => "testnet",
-            },
-            "testnet"
+            serde_json::to_string(&CaravanNetwork::from(bitcoin::Network::Testnet)).unwrap(),
+            "\"testnet\""
         );
 
         assert_eq!(
-            match bitcoin::Network::Signet {
-                bitcoin::Network::Bitcoin => "mainnet",
-                _ => "testnet",
-            },
-            "testnet"
+            serde_json::to_string(&CaravanNetwork::from(bitcoin::Network::Signet)).unwrap(),
+            "\"testnet\""
         );
 
         assert_eq!(
-            match bitcoin::Network::Regtest {
-                bitcoin::Network::Bitcoin => "mainnet",
-                _ => "testnet",
-            },
-            "testnet"
+            serde_json::to_string(&CaravanNetwork::from(bitcoin::Network::Regtest)).unwrap(),
+            "\"testnet\""
         );
-
-        // This tests the exact same logic used in the CaravanExport::export_wallet method
-        let network_mapping = |network: bitcoin::Network| -> &'static str {
-            match network {
-                bitcoin::Network::Bitcoin => "mainnet",
-                _ => "testnet",
-            }
-        };
-
-        assert_eq!(network_mapping(bitcoin::Network::Bitcoin), "mainnet");
-        assert_eq!(network_mapping(bitcoin::Network::Testnet), "testnet");
     }
 
     #[test]
@@ -806,20 +939,20 @@ mod test {
             "extendedPublicKeys": [
                 {
                     "name": "key1",
-                    "bip32Path": "m/48h/0h/0h/2h",
+                    "bip32Path": "m/48'/0'/0'/2'",
                     "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
                     "xfp": "119dbcab"
                 },
                 {
                     "name": "key2",
-                    "bip32Path": "m/48h/0h/0h/2h",
-                    "xpub": "xpub6FKY2Zpu9dFmKZwLkRwt6XK3gcQuJDCz7rBzSWRU4TsUfGgfLdBMK6nVztnz6oSQjSiy2muFnxT5hc4CtYJzr4cLZcmCVeiUxCRGeTqVMuQ",
+                    "bip32Path": "m/48'/0'/0'/2'",
+                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
                     "xfp": "e650dc93"
                 },
                 {
                     "name": "key3",
-                    "bip32Path": "m/48h/0h/0h/2h",
-                    "xpub": "xpub6FPZdGBiQAu3FJjWAjeu6YBCCeUSnpm98y5tQU3AvBXRjQU8H2Su8QkcQZrAL8Wv8hy7G44JzBdNWvjXm1bdHhQDfg4JBzPQshqMfQLt1Bj",
+                    "bip32Path": "m/48'/0'/0'/2'",
+                    "xpub": "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
                     "xfp": "bcc3df08"
                 }
             ],
@@ -837,5 +970,68 @@ mod test {
         // Check that the change descriptor is correctly generated
         assert!(internal.contains("/1/*"));
         assert!(external.contains("/0/*"));
+    }
+
+    #[test]
+    fn test_caravan_descriptors_create_functional_wallet() {
+        // Test that resulting descriptor strings can create a functional BDK Wallet
+        let json = r#"{
+            "name": "Test Wallet",
+            "addressType": "P2WSH",
+            "network": "testnet",
+            "client": {
+                "type": "public"
+            },
+            "quorum": {
+                "requiredSigners": 2,
+                "totalSigners": 2
+            },
+            "extendedPublicKeys": [
+                {
+                    "name": "key1",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3",
+                    "xfp": "73756c7f"
+                },
+                {
+                    "name": "key2",
+                    "bip32Path": "m/48'/1'/0'/2'",
+                    "xpub": "tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4",
+                    "xfp": "f9f62194"
+                }
+            ],
+            "startingAddressIndex": 0
+        }"#;
+
+        let import = CaravanExport::from_str(json).unwrap();
+        let (external_desc, internal_desc) = import.to_descriptors().unwrap();
+
+        // Verify the descriptors can create a functional BDK Wallet
+        let wallet_result = Wallet::create(external_desc, internal_desc)
+            .network(bitcoin::Network::Testnet)
+            .create_wallet_no_persist();
+
+        assert!(
+            wallet_result.is_ok(),
+            "Failed to create wallet from Caravan export descriptors: {:?}",
+            wallet_result.err()
+        );
+
+        let mut wallet = wallet_result.unwrap();
+
+        // Verify basic wallet functionality
+        assert_eq!(wallet.network(), bitcoin::Network::Testnet);
+
+        // Test address generation to verify the wallet is functional
+        let address = wallet.reveal_next_address(crate::types::KeychainKind::External);
+        assert_eq!(address.index, 0);
+
+        // Verify it's a proper script hash address (P2WSH)
+        let addr_str = address.address.to_string();
+        assert!(
+            addr_str.starts_with("tb1"),
+            "Expected testnet bech32 address, got: {}",
+            addr_str
+        );
     }
 }

@@ -1072,7 +1072,7 @@ impl Wallet {
     ///
     /// To iterate over all canonical transactions, including those that are irrelevant, use
     /// [`TxGraph::list_canonical_txs`].
-    pub fn transactions<'a>(&'a self) -> impl Iterator<Item = WalletTx<'a>> + 'a {
+    pub fn transactions(&self) -> impl Iterator<Item = WalletTx<'_>> + '_ {
         let tx_graph = self.tx_graph.graph();
         let tx_index = &self.tx_graph.index;
         tx_graph
