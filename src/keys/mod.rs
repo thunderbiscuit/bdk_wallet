@@ -27,7 +27,7 @@ use bitcoin::{
     bip32,
     key::XOnlyPublicKey,
     secp256k1::{self, Secp256k1, Signing},
-    Network, NetworkKind, PrivateKey, PublicKey,
+    NetworkKind, PrivateKey, PublicKey,
 };
 use miniscript::{
     descriptor::{Descriptor, DescriptorMultiXKey, DescriptorXKey, Wildcard},
@@ -618,7 +618,7 @@ pub trait GeneratableKey<Ctx: ScriptContext>: Sized {
     /// Type specifying the amount of entropy required e.g. `[u8;32]`
     type Entropy: AsMut<[u8]> + Default;
 
-    /// Extra options required by the `generate_with_entropy`
+    /// Extra options required to generate the key.
     type Options;
     /// Returned error in case of failure
     type Error: core::fmt::Debug;
@@ -697,16 +697,35 @@ where
 impl<Ctx: ScriptContext> GeneratableKey<Ctx> for bip32::Xpriv {
     type Entropy = [u8; 32];
 
-    type Options = ();
+    type Options = XprivGenerateOptions;
     type Error = bip32::Error;
 
     fn generate_with_entropy(
-        _: Self::Options,
+        options: Self::Options,
         entropy: Self::Entropy,
     ) -> Result<GeneratedKey<Self, Ctx>, Self::Error> {
-        // Pick an arbitrary network kind here, but say that we support all of them.
-        let xprv = bip32::Xpriv::new_master(NetworkKind::Main, entropy.as_ref())?;
-        Ok(GeneratedKey::new(xprv, any_network_kind()))
+        let (kind, valid_networks) = if options.network.is_mainnet() {
+            (NetworkKind::Main, mainnet_network_kind())
+        } else {
+            (NetworkKind::Test, test_network_kind())
+        };
+        let xprv = bip32::Xpriv::new_master(kind, entropy.as_ref())?;
+        Ok(GeneratedKey::new(xprv, valid_networks))
+    }
+}
+
+/// Options for generating a [`bip32::Xpriv`].
+#[derive(Debug, Copy, Clone)]
+pub struct XprivGenerateOptions {
+    /// The network to be used when generating the xprv, default to `NetworkKind::Main`
+    pub network: NetworkKind,
+}
+
+impl Default for XprivGenerateOptions {
+    fn default() -> Self {
+        XprivGenerateOptions {
+            network: NetworkKind::Main,
+        }
     }
 }
 
@@ -717,11 +736,16 @@ impl<Ctx: ScriptContext> GeneratableKey<Ctx> for bip32::Xpriv {
 pub struct PrivateKeyGenerateOptions {
     /// Whether the generated key should be "compressed" or not.
     pub compressed: bool,
+    /// The kind of network to be used, defaults to `NetworkKind::Main`.
+    pub network: NetworkKind,
 }
 
 impl Default for PrivateKeyGenerateOptions {
     fn default() -> Self {
-        PrivateKeyGenerateOptions { compressed: true }
+        PrivateKeyGenerateOptions {
+            compressed: true,
+            network: NetworkKind::Main,
+        }
     }
 }
 
@@ -735,15 +759,19 @@ impl<Ctx: ScriptContext> GeneratableKey<Ctx> for PrivateKey {
         options: Self::Options,
         entropy: Self::Entropy,
     ) -> Result<GeneratedKey<Self, Ctx>, Self::Error> {
-        // pick a arbitrary network here, but say that we support all of them
         let inner = secp256k1::SecretKey::from_slice(&entropy)?;
         let private_key = PrivateKey {
             compressed: options.compressed,
-            network: Network::Bitcoin.into(),
+            network: options.network,
             inner,
         };
+        let valid_networks = if private_key.network.is_mainnet() {
+            mainnet_network_kind()
+        } else {
+            test_network_kind()
+        };
 
-        Ok(GeneratedKey::new(private_key, any_network_kind()))
+        Ok(GeneratedKey::new(private_key, valid_networks))
     }
 }
 
@@ -1022,11 +1050,37 @@ mod test {
     pub const TEST_ENTROPY: [u8; 32] = [0xAA; 32];
 
     #[test]
+    fn test_xpriv_generate_options() {
+        use bitcoin::bip32::Xpriv;
+        let secp = SecpCtx::new();
+        // Test
+        let options = XprivGenerateOptions {
+            network: NetworkKind::Test,
+        };
+        let xpriv: GeneratedKey<Xpriv, miniscript::Segwitv0> = Xpriv::generate(options).unwrap();
+        let desc_key = xpriv
+            .into_descriptor_key(None, "m/84h/1h/0h".parse().unwrap())
+            .unwrap();
+        let desc_pk = desc_key.extract(&secp).unwrap().0;
+        assert!(desc_pk.to_string().contains("tpub"));
+        // Main
+        let options = XprivGenerateOptions {
+            network: NetworkKind::Main,
+        };
+        let xpriv: GeneratedKey<Xpriv, miniscript::Segwitv0> = Xpriv::generate(options).unwrap();
+        let desc_key = xpriv
+            .into_descriptor_key(None, "m/84h/1h/0h".parse().unwrap())
+            .unwrap();
+        let desc_pk = desc_key.extract(&secp).unwrap().0;
+        assert!(desc_pk.to_string().contains("xpub"));
+    }
+
+    #[test]
     fn test_keys_generate_xprv() {
         let generated_xprv: GeneratedKey<_, miniscript::Segwitv0> =
             bip32::Xpriv::generate_with_entropy_default(TEST_ENTROPY).unwrap();
 
-        assert_eq!(generated_xprv.valid_network_kinds, any_network_kind());
+        assert_eq!(generated_xprv.valid_network_kinds, mainnet_network_kind());
         assert_eq!(generated_xprv.to_string(), "xprv9s21ZrQH143K4Xr1cJyqTvuL2FWR8eicgY9boWqMBv8MDVUZ65AXHnzBrK1nyomu6wdcabRgmGTaAKawvhAno1V5FowGpTLVx3jxzE5uk3Q");
     }
 
@@ -1035,7 +1089,7 @@ mod test {
         let generated_wif: GeneratedKey<_, miniscript::Segwitv0> =
             bitcoin::PrivateKey::generate_with_entropy_default(TEST_ENTROPY).unwrap();
 
-        assert_eq!(generated_wif.valid_network_kinds, any_network_kind());
+        assert_eq!(generated_wif.valid_network_kinds, mainnet_network_kind());
         assert_eq!(
             generated_wif.to_string(),
             "L2wTu6hQrnDMiFNWA5na6jB12ErGQqtXwqpSL7aWquJaZG8Ai3ch"
