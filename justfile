@@ -4,6 +4,9 @@ alias f := fmt
 alias t := test
 alias p := pre-push
 
+_default:
+   @just --list
+
 # Build the project
 build:
    cargo build
