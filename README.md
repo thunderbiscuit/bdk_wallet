@@ -73,41 +73,43 @@ To persist `Wallet` state use a data storage crate that reads and writes [`Chang
 **Implementations**
 
 * [`bdk_file_store`]: Stores wallet changes in a simple flat file.
+* `rusqlite`: Stores wallet changes in a SQLite database.
 
 **Example**
 
 ```rust,no_run
-use bdk_wallet::{bitcoin::Network, KeychainKind, ChangeSet, Wallet};
+use bdk_wallet::rusqlite;
+use bdk_wallet::{KeychainKind, Wallet};
 
-// Open or create a new file store for wallet data.
-let (mut db, _changeset) =
-    bdk_file_store::Store::<ChangeSet>::load_or_create(b"magic_bytes", "/tmp/my_wallet.db")
-        .expect("create store");
+// Open or create a new SQLite database for wallet data.
+let db_path = "my_wallet.sqlite";
+let mut conn = rusqlite::Connection::open(db_path)?;
 
-// Create a wallet with initial wallet data read from the file store.
-let network = Network::Testnet;
+let network = bitcoin::Network::Testnet;
 let descriptor = "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/84'/1'/0'/0/*)";
 let change_descriptor = "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/84'/1'/0'/1/*)";
-let wallet_opt = Wallet::load()
+
+let mut wallet = match Wallet::load()
     .descriptor(KeychainKind::External, Some(descriptor))
     .descriptor(KeychainKind::Internal, Some(change_descriptor))
     .extract_keys()
     .check_network(network)
-    .load_wallet(&mut db)
-    .expect("wallet");
-let mut wallet = match wallet_opt {
+    .load_wallet(&mut conn)?
+{
     Some(wallet) => wallet,
     None => Wallet::create(descriptor, change_descriptor)
         .network(network)
-        .create_wallet(&mut db)
-        .expect("wallet"),
+        .create_wallet(&mut conn)?,
 };
 
-// Get a new address to receive bitcoin.
-let receive_address = wallet.reveal_next_address(KeychainKind::External);
-// Persist staged wallet data changes to the file store.
-wallet.persist(&mut db).expect("persist");
-println!("Your new receive address is: {}", receive_address.address);
+// Get a new address to receive bitcoin!
+let address_info = wallet.reveal_next_address(KeychainKind::External);
+
+// Persist new wallet state to database.
+wallet.persist(&mut conn)?;
+
+println!("Next receive address: {}", address_info.address);
+Ok::<_, anyhow::Error>(())
 ```
 
 ## Minimum Supported Rust Version (MSRV)
@@ -134,8 +136,8 @@ just test
 
 Licensed under either of
 
-* Apache License, Version 2.0, ([LICENSE-APACHE](../../LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
-* MIT license ([LICENSE-MIT](../../LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
 
 at your option.
 
@@ -146,7 +148,8 @@ submitted for inclusion in the work by you, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
 conditions.
 
-[`Wallet`]: https://docs.rs/bdk_wallet/latest/bdk_wallet/wallet/struct.Wallet.html
+[`Wallet`]: https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.Wallet.html
+[`ChangeSet`]: https://docs.rs/bdk_wallet/latest/bdk_wallet/struct.ChangeSet.html
 [`bdk`]: https://github.com/bitcoindevkit/bdk
 [`bdk_wallet`]: https://docs.rs/bdk_wallet/latest
 [`bdk_chain`]: https://docs.rs/bdk_chain/latest
@@ -154,5 +157,5 @@ conditions.
 [`bdk_electrum`]: https://docs.rs/bdk_electrum/latest
 [`bdk_esplora`]: https://docs.rs/bdk_esplora/latest
 [`bdk_bitcoind_rpc`]: https://docs.rs/bdk_bitcoind_rpc/latest
-[`rust-bitcoin`]: https://docs.rs/miniscript/latest/bitcoin/index.html
+[`rust-bitcoin`]: https://docs.rs/bitcoin/latest/bitcoin/
 [`rust-miniscript`]: https://docs.rs/miniscript/latest/miniscript/index.html
