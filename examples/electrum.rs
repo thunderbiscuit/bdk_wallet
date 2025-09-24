@@ -58,9 +58,7 @@ fn main() -> Result<(), anyhow::Error> {
             if once.insert(k) {
                 print!("\nScanning keychain [{k:?}]");
             }
-            if spk_i.is_multiple_of(5) {
-                print!(" {spk_i:<3}");
-            }
+            print!(" {spk_i:<3}");
             stdout.flush().expect("must flush");
         }
     });
@@ -109,7 +107,7 @@ fn main() -> Result<(), anyhow::Error> {
             let progress_percent =
                 (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
             let progress_percent = progress_percent.round() as u32;
-            if progress_percent.is_multiple_of(5) && progress_percent > last_printed {
+            if progress_percent % 5 == 0 && progress_percent > last_printed {
                 print!("{progress_percent}% ");
                 std::io::stdout().flush().expect("must flush");
                 last_printed = progress_percent;

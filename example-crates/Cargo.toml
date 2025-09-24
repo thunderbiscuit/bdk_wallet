@@ -1,8 +1,0 @@
-[workspace]
-resolver = "2"
-members = [
-    "example_wallet_electrum",
-    "example_wallet_esplora_blocking",
-    "example_wallet_esplora_async",
-    "example_wallet_rpc",
-]

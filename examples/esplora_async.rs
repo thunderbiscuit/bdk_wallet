@@ -1,4 +1,3 @@
-use anyhow::Ok;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
@@ -52,9 +51,7 @@ async fn main() -> Result<(), anyhow::Error> {
             if once.insert(keychain) {
                 print!("\nScanning keychain [{keychain:?}]");
             }
-            if spk_i.is_multiple_of(5) {
-                print!(" {spk_i:<3}");
-            }
+            print!(" {spk_i:<3}");
             stdout.flush().expect("must flush")
         }
     });
@@ -104,7 +101,7 @@ async fn main() -> Result<(), anyhow::Error> {
             let progress_percent =
                 (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
             let progress_percent = progress_percent.round() as u32;
-            if progress_percent.is_multiple_of(5) && progress_percent > printed {
+            if progress_percent % 5 == 0 && progress_percent > printed {
                 print!("{progress_percent}% ");
                 std::io::stdout().flush().expect("must flush");
                 printed = progress_percent;
@@ -155,7 +152,7 @@ async fn main() -> Result<(), anyhow::Error> {
             let progress_percent =
                 (100 * sync_progress.consumed()) as f32 / sync_progress.total() as f32;
             let progress_percent = progress_percent.round() as u32;
-            if progress_percent.is_multiple_of(10) && progress_percent > printed {
+            if progress_percent % 10 == 0 && progress_percent > printed {
                 print!("{progress_percent}% ");
                 std::io::stdout().flush().expect("must flush");
                 printed = progress_percent;

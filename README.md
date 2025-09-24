@@ -1,9 +1,7 @@
-# The Bitcoin Dev Kit Wallet
-
 <div align="center">
-  <h1>BDK Wallet</h1>
+  <h1>BDK</h1>
 
-  <img src="./static/bdk.png" width="220" />
+  <img src="https://raw.githubusercontent.com/bitcoindevkit/bdk/master/static/bdk.png" width="220" />
 
   <p>
     <strong>A modern, lightweight, descriptor-based wallet library written in Rust!</strong>
@@ -11,10 +9,10 @@
 
   <p>
     <a href="https://crates.io/crates/bdk_wallet"><img alt="Crate Info" src="https://img.shields.io/crates/v/bdk_wallet.svg"/></a>
-    <a href="https://github.com/bitcoindevkit/bdk_wallet/blob/master/LICENSE"><img alt="MIT or Apache-2.0 Licensed" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg"/></a>
-    <a href="https://github.com/bitcoindevkit/bdk_wallet/actions?query=workflow%3ACI"><img alt="CI Status" src="https://github.com/bitcoindevkit/bdk_wallet/workflows/CI/badge.svg"></a>
-    <a href="https://coveralls.io/github/bitcoindevkit/bdk_wallet?branch=master"><img src="https://coveralls.io/repos/github/bitcoindevkit/bdk_wallet/badge.svg?branch=master"/></a>
-    <a href="https://docs.rs/bdk_wallet"><img alt="Wallet API Docs" src="https://img.shields.io/badge/docs.rs-bdk_wallet-green"/></a>
+    <a href="https://github.com/bitcoindevkit/bdk/blob/master/LICENSE"><img alt="MIT or Apache-2.0 Licensed" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg"/></a>
+    <a href="https://github.com/bitcoindevkit/bdk/actions?query=workflow%3ACI"><img alt="CI Status" src="https://github.com/bitcoindevkit/bdk/workflows/CI/badge.svg"></a>
+    <a href="https://coveralls.io/github/bitcoindevkit/bdk?branch=master"><img src="https://coveralls.io/repos/github/bitcoindevkit/bdk/badge.svg?branch=master"/></a>
+    <a href="https://docs.rs/bdk_wallet"><img alt="API Docs" src="https://img.shields.io/badge/docs.rs-bdk_wallet-green"/></a>
     <a href="https://blog.rust-lang.org/2025/02/20/Rust-1.85.0/"><img alt="Rustc Version 1.85.0+" src="https://img.shields.io/badge/rustc-1.85.0%2B-lightgrey.svg"/></a>
     <a href="https://discord.gg/d7NkDKm"><img alt="Chat on Discord" src="https://img.shields.io/discord/753336465005608961?logo=discord"></a>
   </p>
@@ -29,25 +27,88 @@
 ## About
 
 The `bdk_wallet` project provides a high level descriptor based wallet API for building Bitcoin applications.
-It is built upon the excellent [`rust-bitcoin`] and [`rust-miniscript`] crates.
 
 ## Architecture
 
-There is currently only one published crate in this repository:
+[`bdk_wallet`] contains the central high level [`Wallet`] type that is built from the other low-level components.
 
-- [`wallet`](./wallet): Contains the central high level `Wallet` type that is built from the low-level mechanisms provided by the other components.
+Core BDK crates that `bdk_wallet` depends on are found in the [`bdk`] repository. This works by
+leveraging the functionality in [`rust-bitcoin`] and [`rust-miniscript`].
 
-Crates that `bdk_wallet` depends on are found in the [`bdk`] repository.
+# BDK Wallet
 
-Fully working examples of how to use these components are in `/examples`:
+The `bdk_wallet` provides the [`Wallet`] type which is a simple, high-level
+interface built from the low-level components of [`bdk_chain`]. `Wallet` is a good starting point
+for many simple applications as well as a good demonstration of how to use the other mechanisms to
+construct a wallet. It has two keychains (external and internal) that are defined by
+[miniscript descriptors][`rust-miniscript`] and uses them to generate addresses. When you give it
+chain data it also uses the descriptors to find transaction outputs owned by them. From there, you
+can create and sign transactions.
 
-- [`example_wallet_esplora_blocking`](examples/example_wallet_esplora_blocking): Uses the `Wallet` to sync and spend using the Esplora blocking interface.
-- [`example_wallet_esplora_async`](examples/example_wallet_esplora_async): Uses the `Wallet` to sync and spend using the Esplora asynchronous interface.
-- [`example_wallet_electrum`](examples/example_wallet_electrum): Uses the `Wallet` to sync and spend using Electrum.
+For details about the API of `Wallet` see the [module-level documentation][`Wallet`].
 
-[`bdk`]: https://github.com/bitcoindevkit/bdk
-[`rust-miniscript`]: https://github.com/rust-bitcoin/rust-miniscript
-[`rust-bitcoin`]: https://github.com/rust-bitcoin/rust-bitcoin
+## Blockchain data
+
+In order to get blockchain data for `Wallet` to consume, you should configure a client from
+an available chain source. Typically you make a request to the chain source and get a response
+that the `Wallet` can use to update its view of the chain.
+
+**Blockchain Data Sources**
+
+* [`bdk_esplora`]: Gets blockchain data from Esplora for updating BDK structures.
+* [`bdk_electrum`]: Gets blockchain data from Electrum for updating BDK structures.
+* [`bdk_bitcoind_rpc`]: Gets blockchain data from Bitcoin Core for updating BDK structures.
+
+**Examples**
+
+* [`examples/esplora_async`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/esplora_async)
+* [`examples/esplora_blocking`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/esplora_blocking)
+* [`examples/electrum`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/electrum)
+* [`examples/bitcoind_rpc`](https://github.com/bitcoindevkit/bdk_wallet/tree/master/examples/bitcoind_rpc)
+
+## Persistence
+
+To persist `Wallet` state use a data storage crate that reads and writes [`ChangeSet`].
+
+**Implementations**
+
+* [`bdk_file_store`]: Stores wallet changes in a simple flat file.
+
+**Example**
+
+```rust,no_run
+use bdk_wallet::{bitcoin::Network, KeychainKind, ChangeSet, Wallet};
+
+// Open or create a new file store for wallet data.
+let (mut db, _changeset) =
+    bdk_file_store::Store::<ChangeSet>::load_or_create(b"magic_bytes", "/tmp/my_wallet.db")
+        .expect("create store");
+
+// Create a wallet with initial wallet data read from the file store.
+let network = Network::Testnet;
+let descriptor = "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/84'/1'/0'/0/*)";
+let change_descriptor = "wpkh(tprv8ZgxMBicQKsPdcAqYBpzAFwU5yxBUo88ggoBqu1qPcHUfSbKK1sKMLmC7EAk438btHQrSdu3jGGQa6PA71nvH5nkDexhLteJqkM4dQmWF9g/84'/1'/0'/1/*)";
+let wallet_opt = Wallet::load()
+    .descriptor(KeychainKind::External, Some(descriptor))
+    .descriptor(KeychainKind::Internal, Some(change_descriptor))
+    .extract_keys()
+    .check_network(network)
+    .load_wallet(&mut db)
+    .expect("wallet");
+let mut wallet = match wallet_opt {
+    Some(wallet) => wallet,
+    None => Wallet::create(descriptor, change_descriptor)
+        .network(network)
+        .create_wallet(&mut db)
+        .expect("wallet"),
+};
+
+// Get a new address to receive bitcoin.
+let receive_address = wallet.reveal_next_address(KeychainKind::External);
+// Persist staged wallet data changes to the file store.
+wallet.persist(&mut db).expect("persist");
+println!("Your new receive address is: {}", receive_address.address);
+```
 
 ## Minimum Supported Rust Version (MSRV)
 
@@ -61,18 +122,37 @@ This project has a [`justfile`](/justfile) for easy command running. You must ha
 
 To see a list of available recipes: `just -l`
 
-## License
+## Testing
+
+### Unit testing
+
+```bash
+just test
+```
+
+# License
 
 Licensed under either of
 
-* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
-* MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+* Apache License, Version 2.0, ([LICENSE-APACHE](../../LICENSE-APACHE) or <https://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](../../LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
 
 at your option.
 
-### Contribution
+# Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
 conditions.
+
+[`Wallet`]: https://docs.rs/bdk_wallet/latest/bdk_wallet/wallet/struct.Wallet.html
+[`bdk`]: https://github.com/bitcoindevkit/bdk
+[`bdk_wallet`]: https://docs.rs/bdk_wallet/latest
+[`bdk_chain`]: https://docs.rs/bdk_chain/latest
+[`bdk_file_store`]: https://docs.rs/bdk_file_store/latest
+[`bdk_electrum`]: https://docs.rs/bdk_electrum/latest
+[`bdk_esplora`]: https://docs.rs/bdk_esplora/latest
+[`bdk_bitcoind_rpc`]: https://docs.rs/bdk_bitcoind_rpc/latest
+[`rust-bitcoin`]: https://docs.rs/miniscript/latest/bitcoin/index.html
+[`rust-miniscript`]: https://docs.rs/miniscript/latest/miniscript/index.html

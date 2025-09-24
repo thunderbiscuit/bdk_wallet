@@ -8,3 +8,4 @@ Cargo.lock
 # Example persisted files.
 *.db
 *.sqlite*
+examples/test_data
