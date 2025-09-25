@@ -1,0 +1,7 @@
+# Zizmor config
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # Allow pin by ref/tag
+        dtolnay/rust-toolchain: ref-pin
