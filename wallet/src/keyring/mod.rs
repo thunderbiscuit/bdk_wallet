@@ -13,7 +13,8 @@
 //! of descriptors. It ensures descriptors are usable together, consistent with a given network,
 //! and will work with a BDK `Wallet`.
 
-mod changeset;
+/// Contains `Changeset` corresponding to `KeyRing`.
+pub mod changeset;
 
 use crate::descriptor::IntoWalletDescriptor;
 use crate::keyring::changeset::ChangeSet;
@@ -92,5 +93,24 @@ where
     /// Return all keychains on this `KeyRing`.
     pub fn list_keychains(&self) -> &BTreeMap<K, Descriptor<DescriptorPublicKey>> {
         &self.descriptors
+    }
+
+    /// Initial changeset.
+    pub fn initial_changeset(&self) -> ChangeSet<K> {
+        ChangeSet {
+            network: Some(self.network),
+            descriptors: self.descriptors.clone(),
+            default_keychain: Some(self.default_keychain.clone()),
+        }
+    }
+
+    /// Construct from changeset.
+    pub fn from_changeset(changeset: ChangeSet<K>) -> Option<Self> {
+        Some(Self {
+            secp: Secp256k1::new(),
+            network: changeset.network?,
+            descriptors: changeset.descriptors,
+            default_keychain: changeset.default_keychain?,
+        })
     }
 }
