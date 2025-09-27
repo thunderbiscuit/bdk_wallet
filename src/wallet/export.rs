@@ -281,6 +281,12 @@ pub struct CaravanExtendedPublicKey {
     /// Name of the signer
     pub name: String,
     /// BIP32 derivation path
+    /// This contains the combined path (origin path + derivation path)
+    /// Note: In the future, we might consider separating this into:
+    /// - origin_path: for the path from master to xpub
+    /// - derivation_path: for the additional derivation steps in the descriptor
+    ///
+    /// But for now, Caravan expects a single combined path.
     pub bip32_path: DerivationPath,
     /// Extended public key
     pub xpub: Xpub,
@@ -353,11 +359,9 @@ impl<'de> Deserialize<'de> for CaravanExtendedPublicKey {
                                 return Err(de::Error::duplicate_field("bip32Path"));
                             }
                             let path_str: String = map.next_value()?;
-                            // Strip m/ prefix if present for DerivationPath parsing
-                            let cleaned_path = path_str.strip_prefix("m/").unwrap_or(&path_str);
+                            // DerivationPath can handle m/ prefix natively
                             bip32_path = Some(
-                                DerivationPath::from_str(cleaned_path)
-                                    .map_err(de::Error::custom)?,
+                                DerivationPath::from_str(&path_str).map_err(de::Error::custom)?,
                             );
                         }
                         Field::Xpub => {
@@ -486,22 +490,11 @@ impl CaravanExport {
     ///
     /// Caravan supports P2SH, P2WSH, and P2SH-P2WSH multisig wallets.
     pub fn export_wallet(wallet: &Wallet, name: &str) -> Result<Self, &'static str> {
-        // Get the descriptor and extract information
-        let descriptor_str = wallet
-            .public_descriptor(KeychainKind::External)
-            .to_string_with_secret(
-                &wallet
-                    .get_signers(KeychainKind::External)
-                    .as_key_map(wallet.secp_ctx()),
-            );
-        let descriptor_str = remove_checksum(descriptor_str);
-
-        // Parse the descriptor to extract required information
-        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(&descriptor_str)
-            .map_err(|_| "Invalid descriptor")?;
+        // Get the descriptor directly from the wallet
+        let descriptor = wallet.public_descriptor(KeychainKind::External);
 
         // Determine the address type and multisig information
-        let (address_type, quorum, keys) = Self::extract_descriptor_info(&descriptor)?;
+        let (address_type, quorum, keys) = Self::extract_descriptor_info(descriptor)?;
 
         // Create the Caravan export
         let export = CaravanExport {
@@ -598,6 +591,9 @@ impl CaravanExport {
                     };
 
                     // Extract the base derivation path (without the final /0/* or /1/*)
+                    // Caravan expects the complete derivation path excluding the final step
+                    // This means combining the origin path with the descriptor's derivation path
+                    // but excluding the last step (which will be added by Caravan later)
                     let base_path = if !xpub_key.derivation_path.is_empty() {
                         // Remove the final derivation step (0 or 1) to get the base path
                         // Convert to vector, remove last element, then back to DerivationPath
@@ -609,7 +605,8 @@ impl CaravanExport {
                             .collect();
                         let base: DerivationPath = base_vec.into();
 
-                        // Combine with origin path if present
+                        // Combine with origin path if present, as Caravan expects the complete path
+                        // from master to just before the final step
                         match &xpub_key.origin {
                             Some((_, origin_path)) => origin_path.extend(&base),
                             None => base,
@@ -1033,5 +1030,73 @@ mod test {
             "Expected testnet bech32 address, got: {}",
             addr_str
         );
+    }
+
+    #[test]
+    fn test_extract_xpubs_complex_derivation() {
+        // Create a descriptor with complex derivation paths (multiple steps)
+        // This simulates a case with [fingerprint/path]xpub/additional/path
+        let descriptor_str = "wsh(sortedmulti(2,[3f3b5353/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/0,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/0))";
+        let descriptor = Descriptor::<DescriptorPublicKey>::from_str(descriptor_str).unwrap();
+
+        // Get the multi object from the descriptor
+        let multi = match descriptor {
+            Descriptor::Wsh(wsh) => {
+                if let miniscript::descriptor::WshInner::SortedMulti(multi) = wsh.into_inner() {
+                    multi
+                } else {
+                    panic!("Expected a SortedMulti in the descriptor")
+                }
+            }
+            _ => panic!("Expected a WSH descriptor"),
+        };
+
+        // Extract the keys
+        let keys = CaravanExport::extract_xpubs_from_multi(&multi).unwrap();
+
+        // Verify we have 2 keys
+        assert_eq!(keys.len(), 2);
+
+        // Check the first key
+        let key1 = &keys[0];
+        assert_eq!(key1.name, "key1");
+        assert_eq!(key1.xfp, Fingerprint::from_str("3f3b5353").unwrap());
+        assert_eq!(
+            key1.bip32_path,
+            DerivationPath::from_str("m/48'/0'/0'/2'/0").unwrap(),
+            "First key should have combined path from origin and derivation"
+        );
+
+        // Check the second key
+        let key2 = &keys[1];
+        assert_eq!(key2.name, "key2");
+        assert_eq!(key2.xfp, Fingerprint::from_str("f9f62194").unwrap());
+        assert_eq!(
+            key2.bip32_path,
+            DerivationPath::from_str("m/48'/0'/0'/2'/0").unwrap(),
+            "Second key should have combined path from origin and derivation"
+        );
+    }
+
+    #[test]
+    fn test_caravan_extended_public_key_serialize_deserialize() {
+        let key = CaravanExtendedPublicKey {
+            name: "test_key".to_string(),
+            bip32_path: DerivationPath::from_str("m/48'/0'/0'/2'/0").unwrap(),
+            xpub: bitcoin::bip32::Xpub::from_str("tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3").unwrap(),
+            xfp: Fingerprint::from_str("3f3b5353").unwrap(),
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&key).unwrap();
+
+        // Deserialize from JSON
+        let deserialized: CaravanExtendedPublicKey = serde_json::from_str(&json).unwrap();
+
+        // Verify fields match
+        assert_eq!(key.name, deserialized.name);
+        assert_eq!(key.bip32_path, deserialized.bip32_path);
+        assert_eq!(key.xpub.to_string(), deserialized.xpub.to_string());
+        assert_eq!(key.xfp, deserialized.xfp);
     }
 }
