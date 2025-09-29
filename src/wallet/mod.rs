@@ -149,16 +149,16 @@ impl From<SyncResponse> for Update {
 /// A derived address and the index it was found at.
 /// For convenience this automatically derefs to `Address`
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AddressInfo {
+pub struct AddressInfo<K> {
     /// Child index of this address
     pub index: u32,
     /// Address
     pub address: Address,
     /// Type of keychain
-    pub keychain: KeychainKind,
+    pub keychain: K,
 }
 
-impl Deref for AddressInfo {
+impl<K> Deref for AddressInfo<K> {
     type Target = Address;
 
     fn deref(&self) -> &Self::Target {
@@ -166,7 +166,7 @@ impl Deref for AddressInfo {
     }
 }
 
-impl fmt::Display for AddressInfo {
+impl<K> fmt::Display for AddressInfo<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.address)
     }
@@ -352,6 +352,77 @@ where
             tx_graph,
             stage,
         }
+    }
+
+    /// Reveal the next address of the default `keychain`.
+    ///
+    /// This is equivalent to calling [`Self::reveal_next_address`] with the default `keychain` as
+    /// argument. Note: This is not fallible as the default keychain must always exist!
+    ///
+    /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
+    /// calls to this method before closing the wallet. For example:
+    // TODO: Fix the following example:
+    // ///
+    // /// ```rust,no_run
+    // /// # use bdk_wallet::{LoadParams, ChangeSet, KeychainKind};
+    // /// use bdk_chain::rusqlite::Connection;
+    // /// let mut conn = Connection::open_in_memory().expect("must open connection");
+    // /// let mut wallet = LoadParams::new()
+    // ///     .load_wallet(&mut conn)
+    // ///     .expect("database is okay")
+    // ///     .expect("database has data");
+    // /// let next_address = wallet.reveal_next_address(KeychainKind::External);
+    // /// wallet.persist(&mut conn).expect("write is okay");
+    // ///
+    // /// // Now it's safe to show the user their next address!
+    // /// println!("Next address: {}", next_address.address);
+    // /// # Ok::<(), anyhow::Error>(())
+    // /// ```
+    pub fn reveal_next_default_address(&mut self) -> AddressInfo<K> {
+        self.reveal_next_address(self.keyring.default_keychain())
+            .expect("default keychain must always exist!")
+    }
+
+    /// Attempt to reveal the next address of the given `keychain`.
+    ///
+    /// This will increment the keychain's derivation index. If the keychain's descriptor doesn't
+    /// contain a wildcard or every address is already revealed up to the maximum derivation
+    /// index defined in [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki),
+    /// then the last revealed address will be returned.
+    ///
+    /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
+    /// calls to this method before closing the wallet. For example:
+    // TODO: Fix the following example:
+    // ///
+    // /// ```rust,no_run
+    // /// # use bdk_wallet::{LoadParams, ChangeSet, KeychainKind};
+    // /// use bdk_chain::rusqlite::Connection;
+    // /// let mut conn = Connection::open_in_memory().expect("must open connection");
+    // /// let mut wallet = LoadParams::new()
+    // ///     .load_wallet(&mut conn)
+    // ///     .expect("database is okay")
+    // ///     .expect("database has data");
+    // /// let next_address = wallet.reveal_next_address(KeychainKind::External);
+    // /// wallet.persist(&mut conn).expect("write is okay");
+    // ///
+    // /// // Now it's safe to show the user their next address!
+    // /// println!("Next address: {}", next_address.address);
+    // /// # Ok::<(), anyhow::Error>(())
+    // /// ```
+    pub fn reveal_next_address(&mut self, keychain: K) -> Option<AddressInfo<K>> {
+        let index = &mut self.tx_graph.index;
+        let stage = &mut self.stage;
+
+        let ((index, spk), index_changeset) = index.reveal_next_spk(keychain.clone())?;
+
+        stage.merge(index_changeset.into());
+
+        Some(AddressInfo {
+            index,
+            address: Address::from_script(spk.as_script(), self.keyring.network)
+                .expect("must have address form"),
+            keychain,
+        })
     }
 }
 
@@ -2865,6 +2936,82 @@ mod test {
     //     use crate::miniscript::Error::Unexpected;
     //     use crate::test_utils::get_test_tr_single_sig_xprv_and_change_desc;
     //     use crate::test_utils::insert_tx;
+    use bdk_chain::DescriptorId;
+    use core::str::FromStr;
+    use miniscript::{Descriptor, DescriptorPublicKey};
+
+    const DESCRIPTORS: [&str; 6] = [
+    "wpkh(tpubDCzuCBKnZA5TNKhiJnASku7kq8Q4iqcVF82JV7mHo2NxWpXkLRbrJaGA5ToE7LCuWpcPErBbpDzbdWKN8aTdJzmRy1jQPmZvnqpwwDwCdy7/1/*)",
+    "wpkh(tpubDCzuCBKnZA5TNKhiJnASku7kq8Q4iqcVF82JV7mHo2NxWpXkLRbrJaGA5ToE7LCuWpcPErBbpDzbdWKN8aTdJzmRy1jQPmZvnqpwwDwCdy7/2/*)",
+    "tr(tpubDCzuCBKnZA5TNKhiJnASku7kq8Q4iqcVF82JV7mHo2NxWpXkLRbrJaGA5ToE7LCuWpcPErBbpDzbdWKN8aTdJzmRy1jQPmZvnqpwwDwCdy7/3/*)",
+    "tr(tpubDCzuCBKnZA5TNKhiJnASku7kq8Q4iqcVF82JV7mHo2NxWpXkLRbrJaGA5ToE7LCuWpcPErBbpDzbdWKN8aTdJzmRy1jQPmZvnqpwwDwCdy7/4/*)",
+    "pkh(tpubDCzuCBKnZA5TNKhiJnASku7kq8Q4iqcVF82JV7mHo2NxWpXkLRbrJaGA5ToE7LCuWpcPErBbpDzbdWKN8aTdJzmRy1jQPmZvnqpwwDwCdy7/5/*)",
+    "pkh(tpubDCzuCBKnZA5TNKhiJnASku7kq8Q4iqcVF82JV7mHo2NxWpXkLRbrJaGA5ToE7LCuWpcPErBbpDzbdWKN8aTdJzmRy1jQPmZvnqpwwDwCdy7/6/*)"];
+
+    /// Parse a descriptor string
+    fn parse_descriptor(s: &str) -> Descriptor<DescriptorPublicKey> {
+        Descriptor::parse_descriptor(&Secp256k1::new(), s)
+            .expect("failed to parse descriptor")
+            .0
+    }
+
+    fn test_keyring(desc_strs: impl IntoIterator<Item = &'static str>) -> KeyRing<DescriptorId> {
+        let mut desc_strs = desc_strs.into_iter();
+        let desc = parse_descriptor(desc_strs.next().unwrap());
+        let mut keyring = KeyRing::new(Network::Testnet4, desc.descriptor_id(), desc);
+        for desc_str in desc_strs {
+            let desc = parse_descriptor(desc_str);
+            keyring.add_descriptor(desc.descriptor_id(), desc, false);
+        }
+        keyring
+    }
+
+    #[test]
+    fn correct_address_is_revealed() {
+        let mut wallet = Wallet::new(test_keyring(DESCRIPTORS));
+        let addrinfo = wallet.reveal_next_default_address();
+        assert_eq!(
+            addrinfo.address.into_unchecked(),
+            Address::from_str("tb1qat8h88r778d8e0x38t2ljtzmgkjusgn2u38avs").unwrap()
+        );
+        let addrinfo = wallet
+            .reveal_next_address(parse_descriptor(DESCRIPTORS[1]).descriptor_id())
+            .unwrap();
+        assert_eq!(
+            addrinfo.address.into_unchecked(),
+            Address::from_str("tb1qun8txyd3p4xgts6y6lj8h2dcxk20s487ll7ss3").unwrap()
+        );
+        let addrinfo = wallet
+            .reveal_next_address(parse_descriptor(DESCRIPTORS[2]).descriptor_id())
+            .unwrap();
+        assert_eq!(
+            addrinfo.address.into_unchecked(),
+            Address::from_str("tb1pnz3jex4wnz88e46rfzckpd9xyvdde8h2hnes4wrllkhygump8c2se9rusg")
+                .unwrap()
+        );
+        let addrinfo = wallet
+            .reveal_next_address(parse_descriptor(DESCRIPTORS[3]).descriptor_id())
+            .unwrap();
+        assert_eq!(
+            addrinfo.address.into_unchecked(),
+            Address::from_str("tb1pv6hmnghp0wtxzeqsvshdq4ennvmqg3eq78vluvzvfkqtmtd5e49q8zht5v")
+                .unwrap()
+        );
+        let addrinfo = wallet
+            .reveal_next_address(parse_descriptor(DESCRIPTORS[4]).descriptor_id())
+            .unwrap();
+        assert_eq!(
+            addrinfo.address.into_unchecked(),
+            Address::from_str("n3TJoFpLPBMGisVYHUGcEBwd9d1FVBwbJQ").unwrap()
+        );
+        let addrinfo = wallet
+            .reveal_next_address(parse_descriptor(DESCRIPTORS[5]).descriptor_id())
+            .unwrap();
+        assert_eq!(
+            addrinfo.address.into_unchecked(),
+            Address::from_str("mq2r39CD8ZnMqyuytQq2zPa1sfHTT6Rjo8").unwrap()
+        );
+    }
 
     //     #[test]
     //     fn not_duplicated_utxos_across_optional_and_required() {
