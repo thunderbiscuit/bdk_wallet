@@ -943,7 +943,7 @@ use common::*;
 //         received
 //     );
 
-    // assert_eq!(fee, Amount::from_sat(6_000));
+// assert_eq!(fee, Amount::from_sat(6_000));
 // }
 
 // // Test that we can fee-bump a tx containing a foreign (p2a) utxo.

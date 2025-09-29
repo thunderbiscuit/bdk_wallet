@@ -142,7 +142,6 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 //     last_evicted: [(tx1.compute_txid(), 1755317760)].into(),
 // };
 
-
 //     let keychain_txout_changeset = keychain_txout::ChangeSet {
 //         last_revealed: [
 //             (descriptor.descriptor_id(), 12),
@@ -161,7 +160,6 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 //         ]
 //         .into(),
 //     };
-
 
 // let locked_outpoints_changeset = locked_outpoints::ChangeSet {
 //     outpoints: [(outpoint, true)].into(),
@@ -193,7 +191,6 @@ fn spk_at_index(descriptor: &Descriptor<DescriptorPublicKey>, index: u32) -> Scr
 //         block_id: block_id!(910236, "BDK"),
 //         confirmation_time: 1755317760,
 //     };
-
 
 // let outpoint = OutPoint::new(hash!("Bitcoin_fixes_things"), 1);
 

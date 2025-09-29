@@ -22,14 +22,13 @@ use alloc::{
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
 
 use bdk_chain::{
-    indexed_tx_graph,
-    indexer::keychain_txout::KeychainTxOutIndex,
+    indexer::keychain_txout::{self, KeychainTxOutIndex, DEFAULT_LOOKAHEAD},
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
         FullScanRequest, FullScanRequestBuilder, FullScanResponse, SyncRequest, SyncRequestBuilder,
         SyncResponse,
     },
-    tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
+    tx_graph::{self, CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
     BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
     FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
@@ -60,12 +59,12 @@ pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
 
-use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
     check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
     Policy, XKeyUtils,
 };
+use crate::keyring::KeyRing;
 use crate::psbt::PsbtUtils;
 use crate::types::*;
 use crate::wallet::{
@@ -74,6 +73,10 @@ use crate::wallet::{
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     // tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
+};
+use crate::{
+    collections::{BTreeMap, HashMap, HashSet},
+    keyring,
 };
 
 // re-exports
@@ -84,33 +87,29 @@ pub use persisted::*;
 pub use utils::IsDust;
 pub use utils::TxDetails;
 
+type KeychainTxGraph<K> = IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>;
+
 /// A Bitcoin wallet
 ///
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
-/// transactions. Its main components are:
-///
-/// 1. output *descriptors* from which it can derive addresses.
-/// 2. [`signer`]s that can contribute signatures to addresses instantiated from the descriptors.
+/// transactions. Its main component is a [`KeyRing`] which holds the network and output
+/// descriptors.
 ///
 /// The user is responsible for loading and writing wallet changes which are represented as
 /// [`ChangeSet`]s (see [`take_staged`]). Also see individual functions and example for instructions
 /// on when [`Wallet`] state needs to be persisted.
 ///
-/// The `Wallet` descriptor (external) and change descriptor (internal) must not derive the same
-/// script pubkeys. See [`KeychainTxOutIndex::insert_descriptor()`] for more details.
+/// The `Wallet` descriptors must not derive the same script pubkeys.
+/// See [`KeychainTxOutIndex::insert_descriptor()`] for more details.
 ///
-/// [`signer`]: crate::signer
 /// [`take_staged`]: Wallet::take_staged
 #[derive(Debug)]
-pub struct Wallet {
-    signers: Arc<SignersContainer>,
-    change_signers: Arc<SignersContainer>,
+pub struct Wallet<K: Ord> {
+    keyring: KeyRing<K>,
     chain: LocalChain,
-    indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
-    stage: ChangeSet,
-    network: Network,
-    secp: SecpCtx,
     locked_outpoints: HashSet<OutPoint>,
+    tx_graph: KeychainTxGraph<K>,
+    stage: ChangeSet<K>,
 }
 
 /// An update to [`Wallet`].
@@ -340,8 +339,9 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// ```rust
 //     /// # use bdk_wallet::Wallet;
 //     /// # use bitcoin::Network;
-//     /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-//     /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
+//     /// # const EXTERNAL_DESC: &str =
+// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
+// 84'/1'/0'/0/*)";     /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
 //     /// # let file_path = temp_dir.path().join("store.db");
 //     /// // Create a wallet that is persisted to SQLite database.
 //     /// use bdk_wallet::rusqlite::Connection;
@@ -373,9 +373,11 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// # use bdk_wallet::Wallet;
 //     /// # use bitcoin::Network;
 //     /// # fn main() -> anyhow::Result<()> {
-//     /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-//     /// # const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
-//     /// // Create a non-persisted wallet.
+//     /// # const EXTERNAL_DESC: &str =
+// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
+// 84'/1'/0'/0/*)";     /// # const INTERNAL_DESC: &str =
+// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
+// 84'/1'/0'/1/*)";     /// // Create a non-persisted wallet.
 //     /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
 //     ///     .network(Network::Testnet)
 //     ///     .create_wallet_no_persist()?;
@@ -401,8 +403,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// Build a new [`Wallet`] from a two-path descriptor.
 //     ///
 //     /// This function parses a multipath descriptor with exactly 2 paths and creates a wallet
-//     /// using the existing receive and change wallet creation logic. Note that you can only use this
-//     /// method with public extended keys (`xpub` prefix) to create watch-only wallets.
+//     /// using the existing receive and change wallet creation logic. Note that you can only use
+// this     /// method with public extended keys (`xpub` prefix) to create watch-only wallets.
 //     ///
 //     /// Multipath descriptors follow [BIP 389] and allow defining both receive and change
 //     /// derivation paths in a single descriptor using the `<0;1>` syntax.
@@ -419,8 +421,10 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// # use bdk_wallet::Wallet;
 //     /// # use bitcoin::Network;
 //     /// # use bdk_wallet::KeychainKind;
-//     /// # const TWO_PATH_DESC: &str = "wpkh([9a6a2580/84'/1'/0']tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/<0;1>/*)";
-//     /// let wallet = Wallet::create_from_two_path_descriptor(TWO_PATH_DESC)
+//     /// # const TWO_PATH_DESC: &str =
+// "wpkh([9a6a2580/84'/1'/0'
+// ]tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/
+// <0;1>/*)";     /// let wallet = Wallet::create_from_two_path_descriptor(TWO_PATH_DESC)
 //     ///     .network(Network::Testnet)
 //     ///     .create_wallet_no_persist()
 //     ///     .unwrap();
@@ -513,18 +517,20 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// Note that the descriptor secret keys are not persisted to the db. You can add
 //     /// signers after-the-fact with [`Wallet::add_signer`] or [`Wallet::set_keymap`]. You
 //     /// can also add keys when building the wallet by using [`LoadParams::keymap`]. Finally
-//     /// you can check the wallet's descriptors are what you expect with [`LoadParams::descriptor`]
-//     /// which will try to populate signers if [`LoadParams::extract_keys`] is enabled.
-//     ///
+//     /// you can check the wallet's descriptors are what you expect with
+// [`LoadParams::descriptor`]     /// which will try to populate signers if
+// [`LoadParams::extract_keys`] is enabled.     ///
 //     /// # Synopsis
 //     ///
 //     /// ```rust,no_run
 //     /// # use bdk_wallet::{Wallet, ChangeSet, KeychainKind};
 //     /// # use bitcoin::{BlockHash, Network, hashes::Hash};
 //     /// # fn main() -> anyhow::Result<()> {
-//     /// # const EXTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)";
-//     /// # const INTERNAL_DESC: &str = "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)";
-//     /// # let changeset = ChangeSet::default();
+//     /// # const EXTERNAL_DESC: &str =
+// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
+// 84'/1'/0'/0/*)";     /// # const INTERNAL_DESC: &str =
+// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
+// 84'/1'/0'/1/*)";     /// # let changeset = ChangeSet::default();
 //     /// // Load a wallet from changeset (no persistence).
 //     /// let wallet = Wallet::load()
 //     ///     .load_wallet_no_persist(changeset)?
@@ -761,8 +767,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// index defined in [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki),
 //     /// then the last revealed address will be returned.
 //     ///
-//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
-//     /// calls to this method before closing the wallet. For example:
+//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
+// more     /// calls to this method before closing the wallet. For example:
 //     ///
 //     /// ```rust,no_run
 //     /// # use bdk_wallet::{LoadParams, ChangeSet, KeychainKind};
@@ -805,8 +811,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// possible index. If all addresses up to the given `index` are already revealed, then
 //     /// no new addresses are returned.
 //     ///
-//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
-//     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
+//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
+// more     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
 //     pub fn reveal_addresses_to(
 //         &mut self,
 //         keychain: KeychainKind,
@@ -835,8 +841,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// been used, in which case the returned address will be the same as calling
 //     /// [`Wallet::reveal_next_address`].
 //     ///
-//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
-//     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
+//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
+// more     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
 //     pub fn next_unused_address(&mut self, keychain: KeychainKind) -> AddressInfo {
 //         let keychain = self.map_keychain(keychain);
 //         let index = &mut self.indexed_graph.index;
@@ -866,9 +872,9 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
 //     /// back into the unused set.
 //     ///
-//     /// Since this is only a superficial marker, it will have no effect if the address at the given
-//     /// `index` was actually used, i.e. the wallet has previously indexed a tx output for the
-//     /// derived spk.
+//     /// Since this is only a superficial marker, it will have no effect if the address at the
+// given     /// `index` was actually used, i.e. the wallet has previously indexed a tx output for
+// the     /// derived spk.
 //     ///
 //     /// [`mark_used`]: Self::mark_used
 //     pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
@@ -922,8 +928,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 
 //     /// Get the [`TxDetails`] of a wallet transaction.
 //     ///
-//     /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions, `None`
-//     /// is returned.
+//     /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions,
+// `None`     /// is returned.
 //     pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
 //         let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
 
@@ -974,10 +980,10 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 
 //     /// Get unbounded script pubkey iterators for both `Internal` and `External` keychains.
 //     ///
-//     /// This is intended to be used when doing a full scan of your addresses (e.g. after restoring
-//     /// from seed words). You pass the `BTreeMap` of iterators to a blockchain data source (e.g.
-//     /// electrum server) which will go through each address until it reaches a *stop gap*.
-//     ///
+//     /// This is intended to be used when doing a full scan of your addresses (e.g. after
+// restoring     /// from seed words). You pass the `BTreeMap` of iterators to a blockchain data
+// source (e.g.     /// electrum server) which will go through each address until it reaches a *stop
+// gap*.     ///
 //     /// Note carefully that iterators go over **all** script pubkeys on the keychains (not what
 //     /// script pubkeys the wallet is storing internally).
 //     pub fn all_unbounded_spk_iters(
@@ -1134,8 +1140,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
 //     ///
 //     /// `WalletTx` contains the full transaction alongside meta-data such as:
-//     /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that exist
-//     ///   in the best chain.
+//     /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that
+// exist     ///   in the best chain.
 //     /// * The [`ChainPosition`] of the transaction in the best chain - whether the transaction is
 //     ///   confirmed or unconfirmed. If the transaction is confirmed, the anchor which proves the
 //     ///   confirmation is provided. If the transaction is unconfirmed, the unix timestamp of when
@@ -1177,8 +1183,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     ///         anchor.block_id.height, anchor.block_id.hash,
 //     ///     ),
 //     ///     ChainPosition::Unconfirmed { first_seen, last_seen } => println!(
-//     ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not anchored in the best chain",
-//     ///         first_seen, last_seen
+//     ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not
+// anchored in the best chain",     ///         first_seen, last_seen
 //     ///     ),
 //     /// }
 //     /// ```
@@ -1201,8 +1207,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// transaction is canonical when it is confirmed in the best chain, or does not conflict
 //     /// with any transaction confirmed in the best chain.
 //     ///
-//     /// To iterate over all transactions, including those that are irrelevant and not canonical, use
-//     /// [`TxGraph::full_txs`].
+//     /// To iterate over all transactions, including those that are irrelevant and not canonical,
+// use     /// [`TxGraph::full_txs`].
 //     ///
 //     /// To iterate over all canonical transactions, including those that are irrelevant, use
 //     /// [`TxGraph::list_canonical_txs`].
@@ -1300,14 +1306,18 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// ```
 //     /// # use bdk_wallet::{Wallet, KeychainKind};
 //     /// # use bdk_wallet::bitcoin::Network;
-//     /// let descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/0/*)";
-//     /// let change_descriptor = "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/1'/0'/1/*)";
-//     /// let wallet = Wallet::create(descriptor, change_descriptor)
+//     /// let descriptor =
+// "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/
+// 84'/1'/0'/0/*)";     /// let change_descriptor =
+// "wpkh(tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/
+// 84'/1'/0'/1/*)";     /// let wallet = Wallet::create(descriptor, change_descriptor)
 //     ///     .network(Network::Testnet)
 //     ///     .create_wallet_no_persist()?;
-//     /// for secret_key in wallet.get_signers(KeychainKind::External).signers().iter().filter_map(|s| s.descriptor_secret_key()) {
-//     ///     // secret_key: tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/84'/0'/0'/0/*
-//     ///     println!("secret_key: {}", secret_key);
+//     /// for secret_key in
+// wallet.get_signers(KeychainKind::External).signers().iter().filter_map(|s|
+// s.descriptor_secret_key()) {     ///     // secret_key:
+// tprv8ZgxMBicQKsPe73PBRSmNbTfbcsZnwWhz5eVmhHpi31HW29Z7mc9B4cWGRQzopNUzZUT391DeDJxL2PefNunWyLgqCKRMDkU1s2s8bAfoSk/
+// 84'/0'/0'/0/*     ///     println!("secret_key: {}", secret_key);
 //     /// }
 //     ///
 //     /// Ok::<(), Box<dyn std::error::Error>>(())
@@ -1333,11 +1343,12 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// # use bdk_wallet::ChangeSet;
 //     /// # use bdk_wallet::error::CreateTxError;
 //     /// # use anyhow::Error;
-//     /// # let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/*)";
-//     /// # let mut wallet = doctest_wallet!();
-//     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
-//     /// let psbt = {
-//     ///    let mut builder =  wallet.build_tx();
+//     /// # let descriptor =
+// "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/
+// *)";     /// # let mut wallet = doctest_wallet!();
+//     /// # let to_address =
+// Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();     /// let
+// psbt = {     ///    let mut builder =  wallet.build_tx();
 //     ///    builder
 //     ///        .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
 //     ///    builder.finish()?
@@ -1372,8 +1383,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //         let internal_policy = internal_descriptor
 //             .map(|desc| {
 //                 Ok::<_, CreateTxError>(
-//                     desc.extract_policy(&self.change_signers, BuildSatisfaction::None, &self.secp)?
-//                         .unwrap(),
+//                     desc.extract_policy(&self.change_signers, BuildSatisfaction::None,
+// &self.secp)?                         .unwrap(),
 //                 )
 //             })
 //             .transpose()?;
@@ -1456,8 +1467,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //                     None => fee_sniping_height,
 //                     // There's a block-based requirement, but the value is lower than the
 //                     // fee_sniping_height.
-//                     Some(value @ absolute::LockTime::Blocks(_)) if value < fee_sniping_height => {
-//                         fee_sniping_height
+//                     Some(value @ absolute::LockTime::Blocks(_)) if value < fee_sniping_height =>
+// {                         fee_sniping_height
 //                     }
 //                     // There's a time-based requirement or a block-based requirement greater
 //                     // than the fee_sniping_height use that value.
@@ -1541,9 +1552,9 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //         let recipients = params.recipients.iter().map(|(r, v)| (r, *v));
 
 //         for (index, (script_pubkey, value)) in recipients.enumerate() {
-//             if !params.allow_dust && value.is_dust(script_pubkey) && !script_pubkey.is_op_return() {
-//                 return Err(CreateTxError::OutputBelowDustLimit(index));
-//             }
+//             if !params.allow_dust && value.is_dust(script_pubkey) &&
+// !script_pubkey.is_op_return() {                 return
+// Err(CreateTxError::OutputBelowDustLimit(index));             }
 
 //             let new_out = TxOut {
 //                 script_pubkey: script_pubkey.clone(),
@@ -1683,8 +1694,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// Bump the fee of a transaction previously created with this wallet.
 //     ///
 //     /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
-//     /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
-//     /// pre-populated with the inputs and outputs of the original transaction.
+//     /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a
+// [`TxBuilder`]     /// pre-populated with the inputs and outputs of the original transaction.
 //     ///
 //     /// ## Example
 //     ///
@@ -1696,11 +1707,12 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// # use bdk_wallet::ChangeSet;
 //     /// # use bdk_wallet::error::CreateTxError;
 //     /// # use anyhow::Error;
-//     /// # let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/*)";
-//     /// # let mut wallet = doctest_wallet!();
-//     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
-//     /// let mut psbt = {
-//     ///     let mut builder = wallet.build_tx();
+//     /// # let descriptor =
+// "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/
+// *)";     /// # let mut wallet = doctest_wallet!();
+//     /// # let to_address =
+// Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();     /// let
+// mut psbt = {     ///     let mut builder = wallet.build_tx();
 //     ///     builder
 //     ///         .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
 //     ///     builder.finish()?
@@ -1796,8 +1808,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //                     }
 //                     None => Ok(WeightedUtxo {
 //                         satisfaction_weight: Weight::from_wu_usize(
-//                             serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
-//                         ),
+//                             serialize(&txin.script_sig).len() * 4 +
+// serialize(&txin.witness).len(),                         ),
 //                         utxo: Utxo::Foreign {
 //                             outpoint,
 //                             sequence: txin.sequence,
@@ -1856,14 +1868,14 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //         })
 //     }
 
-//     /// Sign a transaction with all the wallet's signers, in the order specified by every signer's
-//     /// [`SignerOrdering`]. This function returns the `Result` type with an encapsulated `bool` that
-//     /// has the value true if the PSBT was finalized, or false otherwise.
+//     /// Sign a transaction with all the wallet's signers, in the order specified by every
+// signer's     /// [`SignerOrdering`]. This function returns the `Result` type with an encapsulated
+// `bool` that     /// has the value true if the PSBT was finalized, or false otherwise.
 //     ///
-//     /// The [`SignOptions`] can be used to tweak the behavior of the software signers, and the way
-//     /// the transaction is finalized at the end. Note that it can't be guaranteed that *every*
-//     /// signers will follow the options, but the "software signers" (WIF keys and `xprv`) defined
-//     /// in this library will.
+//     /// The [`SignOptions`] can be used to tweak the behavior of the software signers, and the
+// way     /// the transaction is finalized at the end. Note that it can't be guaranteed that
+// *every*     /// signers will follow the options, but the "software signers" (WIF keys and `xprv`)
+// defined     /// in this library will.
 //     ///
 //     /// ## Example
 //     ///
@@ -1873,11 +1885,12 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// # use bdk_wallet::*;
 //     /// # use bdk_wallet::ChangeSet;
 //     /// # use bdk_wallet::error::CreateTxError;
-//     /// # let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/*)";
-//     /// # let mut wallet = doctest_wallet!();
-//     /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
-//     /// let mut psbt = {
-//     ///     let mut builder = wallet.build_tx();
+//     /// # let descriptor =
+// "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/
+// *)";     /// # let mut wallet = doctest_wallet!();
+//     /// # let to_address =
+// Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();     /// let
+// mut psbt = {     ///     let mut builder = wallet.build_tx();
 //     ///     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
 //     ///     builder.finish()?
 //     /// };
@@ -1885,8 +1898,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// assert!(finalized, "we should have signed all the inputs");
 //     /// # Ok::<(),anyhow::Error>(())
 //     pub fn sign(&self, psbt: &mut Psbt, sign_options: SignOptions) -> Result<bool, SignerError> {
-//         // This adds all the PSBT metadata for the inputs, which will help us later figure out how
-//         // to derive our keys.
+//         // This adds all the PSBT metadata for the inputs, which will help us later figure out
+// how         // to derive our keys.
 //         self.update_psbt_with_descriptor(psbt)
 //             .map_err(SignerError::MiniscriptPsbt)?;
 
@@ -1903,8 +1916,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //             return Err(SignerError::MissingNonWitnessUtxo);
 //         }
 
-//         // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every input
-//         // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for Taproot.
+//         // If the user hasn't explicitly opted-in, refuse to sign the transaction unless every
+// input         // is using `SIGHASH_ALL` or `SIGHASH_DEFAULT` for Taproot.
 //         if !sign_options.allow_all_sighashes
 //             && !psbt.inputs.iter().all(|i| {
 //                 i.sighash_type.is_none()
@@ -1950,8 +1963,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// Returns the descriptor used to create addresses for a particular `keychain`.
 //     ///
 //     /// It's the "public" version of the wallet's descriptor, meaning a new descriptor that has
-//     /// the same structure but with the all secret keys replaced by their corresponding public key.
-//     /// This can be used to build a watch-only version of a wallet.
+//     /// the same structure but with the all secret keys replaced by their corresponding public
+// key.     /// This can be used to build a watch-only version of a wallet.
 //     pub fn public_descriptor(&self, keychain: KeychainKind) -> &ExtendedDescriptor {
 //         self.indexed_graph
 //             .index
@@ -1985,8 +1998,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //             .graph()
 //             .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
 //             .filter(|canon_tx| prev_txids.contains(&canon_tx.tx_node.txid))
-//             // This is for a small performance gain. Although `.filter` filters out excess txs, it
-//             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
+//             // This is for a small performance gain. Although `.filter` filters out excess txs,
+// it             // will still consume the internal `CanonicalIter` entirely. Having a `.take` here
 //             // allows us to stop further unnecessary canonicalization.
 //             .take(prev_txids.len())
 //             .map(|canon_tx| {
@@ -2005,8 +2018,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //                 .inputs
 //                 .get(n)
 //                 .ok_or(IndexOutOfBoundsError::new(n, psbt.inputs.len()))?;
-//             if psbt_input.final_script_sig.is_some() || psbt_input.final_script_witness.is_some() {
-//                 continue;
+//             if psbt_input.final_script_sig.is_some() || psbt_input.final_script_witness.is_some()
+// {                 continue;
 //             }
 //             let confirmation_height = confirmation_heights
 //                 .get(&input.previous_output.txid)
@@ -2015,10 +2028,10 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //                 .assume_height
 //                 .unwrap_or_else(|| self.chain.tip().height());
 
-//             // - Try to derive the descriptor by looking at the txout. If it's in our database, we
-//             //   know exactly which `keychain` to use, and which derivation index it is.
-//             // - If that fails, try to derive it by looking at the psbt input: the complete logic is
-//             //   in `src/descriptor/mod.rs`, but it will basically look at `bip32_derivation`,
+//             // - Try to derive the descriptor by looking at the txout. If it's in our database,
+// we             //   know exactly which `keychain` to use, and which derivation index it is.
+//             // - If that fails, try to derive it by looking at the psbt input: the complete logic
+// is             //   in `src/descriptor/mod.rs`, but it will basically look at `bip32_derivation`,
 //             //   `redeem_script` and `witness_script` to determine the right derivation.
 //             // - If that also fails, it will try it on the internal descriptor, if present.
 //             let desc = psbt
@@ -2100,16 +2113,16 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 
 //     /// Informs the wallet that you no longer intend to broadcast a tx that was built from it.
 //     ///
-//     /// This frees up the change address used when creating the tx for use in future transactions.
-//     // TODO: Make this free up reserved utxos when that's implemented
+//     /// This frees up the change address used when creating the tx for use in future
+// transactions.     // TODO: Make this free up reserved utxos when that's implemented
 //     pub fn cancel_tx(&mut self, tx: &Transaction) {
 //         let txout_index = &mut self.indexed_graph.index;
 //         for txout in &tx.output {
-//             if let Some((keychain, index)) = txout_index.index_of_spk(txout.script_pubkey.clone()) {
-//                 // NOTE: unmark_used will **not** make something unused if it has actually been used
-//                 // by a tx in the tracker. It only removes the superficial marking.
-//                 txout_index.unmark_used(*keychain, *index);
-//             }
+//             if let Some((keychain, index)) =
+// txout_index.index_of_spk(txout.script_pubkey.clone()) {                 // NOTE: unmark_used will
+// **not** make something unused if it has actually been used                 // by a tx in the
+// tracker. It only removes the superficial marking.
+// txout_index.unmark_used(*keychain, *index);             }
 //         }
 //     }
 
@@ -2137,8 +2150,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //             self.indexed_graph
 //                 .graph()
 //                 // Get all unspent UTxOs from wallet.
-//                 // NOTE: the UTxOs returned by the following method already belong to wallet as the
-//                 // call chain uses get_tx_node infallibly.
+//                 // NOTE: the UTxOs returned by the following method already belong to wallet as
+// the                 // call chain uses get_tx_node infallibly.
 //                 .filter_chain_unspents(
 //                     &self.chain,
 //                     self.chain.tip().block_id(),
@@ -2222,8 +2235,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //             match utxo {
 //                 Utxo::Local(utxo) => {
 //                     *psbt_input =
-//                         match self.get_psbt_input(utxo, params.sighash, params.only_witness_utxo) {
-//                             Ok(psbt_input) => psbt_input,
+//                         match self.get_psbt_input(utxo, params.sighash, params.only_witness_utxo)
+// {                             Ok(psbt_input) => psbt_input,
 //                             Err(e) => match e {
 //                                 CreateTxError::UnknownUtxo => psbt::Input {
 //                                     sighash_type: params.sighash,
@@ -2306,8 +2319,8 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     }
 
 //     fn update_psbt_with_descriptor(&self, psbt: &mut Psbt) -> Result<(), MiniscriptPsbtError> {
-//         // We need to borrow `psbt` mutably within the loops, so we have to allocate a vec for all
-//         // the input utxos and outputs.
+//         // We need to borrow `psbt` mutably within the loops, so we have to allocate a vec for
+// all         // the input utxos and outputs.
 //         let utxos = (0..psbt.inputs.len())
 //             .filter_map(|i| psbt.get_utxo_for(i).map(|utxo| (true, i, utxo)))
 //             .chain(
@@ -2356,11 +2369,11 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 
 //     /// Applies an update to the wallet and stages the changes (but does not persist them).
 //     ///
-//     /// Usually you create an `update` by interacting with some blockchain data source and inserting
-//     /// transactions related to your wallet into it.
+//     /// Usually you create an `update` by interacting with some blockchain data source and
+// inserting     /// transactions related to your wallet into it.
 //     ///
-//     /// After applying updates you should persist the staged wallet changes. For an example of how
-//     /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
+//     /// After applying updates you should persist the staged wallet changes. For an example of
+// how     /// to persist staged wallet changes see [`Wallet::reveal_next_address`].
 //     pub fn apply_update(&mut self, update: impl Into<Update>) -> Result<(), CannotConnectError> {
 //         let update = update.into();
 //         let mut changeset = match update.chain {
@@ -2523,10 +2536,10 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     ///
 //     /// Transactions that are not relevant are filtered out.
 //     ///
-//     /// This method takes in an iterator of `(tx, last_seen)` where `last_seen` is the timestamp of
-//     /// when the transaction was last seen in the mempool. This is used for conflict resolution
-//     /// when there is conflicting unconfirmed transactions. The transaction with the later
-//     /// `last_seen` is prioritized.
+//     /// This method takes in an iterator of `(tx, last_seen)` where `last_seen` is the timestamp
+// of     /// when the transaction was last seen in the mempool. This is used for conflict
+// resolution     /// when there is conflicting unconfirmed transactions. The transaction with the
+// later     /// `last_seen` is prioritized.
 //     ///
 //     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
 //     /// if you need the applied unconfirmed transactions to be reloaded after closing the wallet.
@@ -2543,16 +2556,16 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 
 //     /// Apply evictions of the given transaction IDs with their associated timestamps.
 //     ///
-//     /// This function is used to mark specific unconfirmed transactions as evicted from the mempool.
-//     /// Eviction means that these transactions are not considered canonical by default, and will
-//     /// no longer be part of the wallet's [`transactions`] set. This can happen for example when
-//     /// a transaction is dropped from the mempool due to low fees or conflicts with another
-//     /// transaction.
+//     /// This function is used to mark specific unconfirmed transactions as evicted from the
+// mempool.     /// Eviction means that these transactions are not considered canonical by default,
+// and will     /// no longer be part of the wallet's [`transactions`] set. This can happen for
+// example when     /// a transaction is dropped from the mempool due to low fees or conflicts with
+// another     /// transaction.
 //     ///
-//     /// Only transactions that are currently unconfirmed and canonical are considered for eviction.
-//     /// Transactions that are not relevant to the wallet are ignored. Note that an evicted
-//     /// transaction can become canonical again if it is later observed on-chain or seen in the
-//     /// mempool with a higher priority (e.g., due to a fee bump).
+//     /// Only transactions that are currently unconfirmed and canonical are considered for
+// eviction.     /// Transactions that are not relevant to the wallet are ignored. Note that an
+// evicted     /// transaction can become canonical again if it is later observed on-chain or seen
+// in the     /// mempool with a higher priority (e.g., due to a fee bump).
 //     ///
 //     /// ## Parameters
 //     ///
@@ -2564,15 +2577,15 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     ///
 //     /// ## Notes
 //     ///
-//     /// - Not all blockchain backends support automatic mempool eviction handling - this method may
-//     ///   be used in such cases. It can also be used to negate the effect of
-//     ///   [`apply_unconfirmed_txs`] for a particular transaction without the need for an additional
-//     ///   sync.
-//     /// - The changes are staged in the wallet's internal state and must be persisted to ensure they
-//     ///   are retained across wallet restarts. Use [`Wallet::take_staged`] to retrieve the staged
-//     ///   changes and persist them to your database of choice.
-//     /// - Evicted transactions are removed from the wallet's canonical transaction set, but the data
-//     ///   remains in the wallet's internal transaction graph for historical purposes.
+//     /// - Not all blockchain backends support automatic mempool eviction handling - this method
+// may     ///   be used in such cases. It can also be used to negate the effect of
+//     ///   [`apply_unconfirmed_txs`] for a particular transaction without the need for an
+// additional     ///   sync.
+//     /// - The changes are staged in the wallet's internal state and must be persisted to ensure
+// they     ///   are retained across wallet restarts. Use [`Wallet::take_staged`] to retrieve the
+// staged     ///   changes and persist them to your database of choice.
+//     /// - Evicted transactions are removed from the wallet's canonical transaction set, but the
+// data     ///   remains in the wallet's internal transaction graph for historical purposes.
 //     /// - Ensure that the timestamps provided are accurate and monotonically increasing, as they
 //     ///   influence the wallet's canonicalization logic.
 //     ///
@@ -2666,12 +2679,12 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //     /// [`FullScanRequest] collects iterators for the wallet's keychain script pub keys needed to
 //     /// start a blockchain full scan with a spk based blockchain client.
 //     ///
-//     /// This operation is generally only used when importing or restoring a previously used wallet
-//     /// in which the list of used scripts is not known.
+//     /// This operation is generally only used when importing or restoring a previously used
+// wallet     /// in which the list of used scripts is not known.
 //     ///
-//     /// The time of the scan is the current system time and is used to record the tx last-seen for
-//     /// mempool transactions. To supply your own start time see [`Wallet::start_full_scan_at`].
-//     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+//     /// The time of the scan is the current system time and is used to record the tx last-seen
+// for     /// mempool transactions. To supply your own start time see
+// [`Wallet::start_full_scan_at`].     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
 //     #[cfg(feature = "std")]
 //     pub fn start_full_scan(&self) -> FullScanRequestBuilder<KeychainKind> {
 //         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
@@ -2694,7 +2707,6 @@ pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>
 //         self.indexed_graph.graph()
 //     }
 // }
-
 
 /// Deterministically generate a unique name given the descriptors defining the [`Wallet`].
 ///

@@ -142,7 +142,6 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 //     }
 // }
 
-
 // /// Methods when `P` is a [`WalletPersister`].
 // impl<P: WalletPersister> PersistedWallet<P> {
 //     /// Create a new [`PersistedWallet`] with the given `persister` and `params`.
@@ -166,7 +165,6 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 //             _marker: PhantomData,
 //         })
 //     }
-
 
 //     /// Load a previously [`PersistedWallet`] from the given `persister` and `params`.
 //     pub fn load(
@@ -201,7 +199,6 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 //     }
 // }
 
-
 // /// Methods when `P` is an [`AsyncWalletPersister`].
 // impl<P: AsyncWalletPersister> PersistedWallet<P> {
 //     /// Create a new [`PersistedWallet`] with the given async `persister` and `params`.
@@ -229,7 +226,6 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 //             _marker: PhantomData,
 //         })
 //     }
-
 
 //     /// Load a previously [`PersistedWallet`] from the given async `persister` and `params`.
 //     pub async fn load_async(
@@ -299,7 +295,6 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 //     }
 // }
 
-
 // /// Error for [`bdk_file_store`]'s implementation of [`WalletPersister`].
 // #[cfg(feature = "file_store")]
 // #[derive(Debug)]
@@ -310,7 +305,6 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 //     /// Error when writing to the store.
 //     Write(std::io::Error),
 // }
-
 
 // #[cfg(feature = "file_store")]
 // impl core::fmt::Display for FileStoreError {
@@ -362,7 +356,6 @@ impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
 
 #[cfg(feature = "std")]
 impl<E: fmt::Debug + fmt::Display> std::error::Error for LoadWithPersistError<E> {}
-
 
 // /// Error type for [`PersistedWallet::create`].
 // #[derive(Debug)]

@@ -10,7 +10,9 @@ use crate::locked_outpoints;
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
 
-/// A change set for [`Wallet`].
+use crate::keyring;
+
+/// A change set for [`Wallet`]
 ///
 /// ## Definition
 ///
@@ -103,14 +105,10 @@ type IndexedTxGraphChangeSet =
 /// [`WalletPersister`]: crate::WalletPersister
 /// [`Wallet::staged`]: crate::Wallet::staged
 /// [`Wallet`]: crate::Wallet
-#[derive(Default, Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct ChangeSet {
-    /// Descriptor for recipient addresses.
-    pub descriptor: Option<Descriptor<DescriptorPublicKey>>,
-    /// Descriptor for change addresses.
-    pub change_descriptor: Option<Descriptor<DescriptorPublicKey>>,
-    /// Stores the network type of the transaction data.
-    pub network: Option<bitcoin::Network>,
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ChangeSet<K: Ord> {
+    /// Stores the `KeyRing` containing the network and descriptor data.
+    pub keyring: keyring::changeset::ChangeSet<K>,
     /// Changes to the [`LocalChain`](local_chain::LocalChain).
     pub local_chain: local_chain::ChangeSet,
     /// Changes to [`TxGraph`](tx_graph::TxGraph).
@@ -121,44 +119,37 @@ pub struct ChangeSet {
     pub locked_outpoints: locked_outpoints::ChangeSet,
 }
 
-impl Merge for ChangeSet {
+impl<K> Default for ChangeSet<K>
+where
+    K: Ord,
+{
+    fn default() -> Self {
+        Self {
+            keyring: Default::default(),
+            local_chain: Default::default(),
+            tx_graph: Default::default(),
+            indexer: Default::default(),
+            locked_outpoints: Default::default(),
+        }
+    }
+}
+
+impl<K> Merge for ChangeSet<K>
+where
+    K: Ord,
+{
     /// Merge another [`ChangeSet`] into itself.
     fn merge(&mut self, other: Self) {
-        if other.descriptor.is_some() {
-            debug_assert!(
-                self.descriptor.is_none() || self.descriptor == other.descriptor,
-                "descriptor must never change"
-            );
-            self.descriptor = other.descriptor;
-        }
-        if other.change_descriptor.is_some() {
-            debug_assert!(
-                self.change_descriptor.is_none()
-                    || self.change_descriptor == other.change_descriptor,
-                "change descriptor must never change"
-            );
-            self.change_descriptor = other.change_descriptor;
-        }
-        if other.network.is_some() {
-            debug_assert!(
-                self.network.is_none() || self.network == other.network,
-                "network must never change"
-            );
-            self.network = other.network;
-        }
-
         // merge locked outpoints
         self.locked_outpoints.merge(other.locked_outpoints);
-
+        Merge::merge(&mut self.keyring, other.keyring);
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
     }
 
     fn is_empty(&self) -> bool {
-        self.descriptor.is_none()
-            && self.change_descriptor.is_none()
-            && self.network.is_none()
+        self.keyring.is_empty()
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
@@ -174,7 +165,7 @@ impl Merge for ChangeSet {
 //     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
 //     /// Name of table to store wallet locked outpoints.
 //     pub const WALLET_OUTPOINT_LOCK_TABLE_NAME: &'static str = "bdk_wallet_locked_outpoints";
-// 
+//
 //     /// Get v0 sqlite [ChangeSet] schema
 //     pub fn schema_v0() -> alloc::string::String {
 //         format!(
@@ -201,8 +192,8 @@ impl Merge for ChangeSet {
 // }
 
 //     /// Initialize sqlite tables for wallet tables.
-//     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
-//         crate::rusqlite_impl::migrate_schema(
+//     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) ->
+// chain::rusqlite::Result<()> {         crate::rusqlite_impl::migrate_schema(
 //             db_tx,
 //             Self::WALLET_SCHEMA_NAME,
 //             &[&Self::schema_v0(), &Self::schema_v1()],
@@ -214,7 +205,6 @@ impl Merge for ChangeSet {
 
 //         Ok(())
 //     }
-
 
 // /// Recover a [`ChangeSet`] from sqlite database.
 // pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
@@ -342,8 +332,7 @@ impl Merge for ChangeSet {
 //     }
 // }
 
-
-impl From<local_chain::ChangeSet> for ChangeSet {
+impl<K: Ord> From<local_chain::ChangeSet> for ChangeSet<K> {
     fn from(chain: local_chain::ChangeSet) -> Self {
         Self {
             local_chain: chain,
@@ -352,7 +341,7 @@ impl From<local_chain::ChangeSet> for ChangeSet {
     }
 }
 
-impl From<IndexedTxGraphChangeSet> for ChangeSet {
+impl<K: Ord> From<IndexedTxGraphChangeSet> for ChangeSet<K> {
     fn from(indexed_tx_graph: IndexedTxGraphChangeSet) -> Self {
         Self {
             tx_graph: indexed_tx_graph.tx_graph,
@@ -362,7 +351,7 @@ impl From<IndexedTxGraphChangeSet> for ChangeSet {
     }
 }
 
-impl From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet {
+impl<K: Ord> From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet<K> {
     fn from(tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>) -> Self {
         Self {
             tx_graph,
@@ -371,7 +360,7 @@ impl From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet {
     }
 }
 
-impl From<keychain_txout::ChangeSet> for ChangeSet {
+impl<K: Ord> From<keychain_txout::ChangeSet> for ChangeSet<K> {
     fn from(indexer: keychain_txout::ChangeSet) -> Self {
         Self {
             indexer,
@@ -380,7 +369,10 @@ impl From<keychain_txout::ChangeSet> for ChangeSet {
     }
 }
 
-impl From<locked_outpoints::ChangeSet> for ChangeSet {
+impl<K> From<locked_outpoints::ChangeSet> for ChangeSet<K>
+where
+    K: Ord,
+{
     fn from(locked_outpoints: locked_outpoints::ChangeSet) -> Self {
         Self {
             locked_outpoints,
