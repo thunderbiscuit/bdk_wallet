@@ -4,8 +4,10 @@ name: CI
 
 permissions: {}
 
-jobs:
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -30,8 +32,7 @@ jobs:
           - ubuntu-24.04-arm
         rust:
           - version: ${{ needs.prepare.outputs.rust_version }}
-            clippy: true
-          - version: 1.63.0 # Overall MSRV
+          - version: 1.85.0 # MSRV
         features:
           - --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
           - --all-features
@@ -41,22 +42,20 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@v1
         with:
             toolchain: ${{ matrix.rust.version }}
-            override: true
-            profile: minimal
       - name: Rust Cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
       - name: Pin dependencies for MSRV
-        if: matrix.rust.version == '1.63.0'
+        if: matrix.rust.version == '1.85.0'
         run: ./ci/pin-msrv.sh
       - name: Build + Test
         env:
           MATRIX_RUST_VERSION: ${{ matrix.rust.version }}
         run: |
-          cargo build --workspace --exclude 'example_*' ${{ matrix.features }}
-          cargo test --workspace --exclude 'example_*' ${{ matrix.features }}
+          cargo build --workspace --all-targets ${{ matrix.features }}
+          cargo test --workspace ${{ matrix.features }}
 
   check-no-std:
     needs: prepare
@@ -68,16 +67,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ needs.prepare.outputs.rust_version }}
-          override: true
-          profile: minimal
           # target: "thumbv6m-none-eabi"
       - name: Rust Cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
-      - name: Check bdk wallet
-        working-directory: ./wallet
+      - name: Check no-std
         # TODO "--target thumbv6m-none-eabi" should work but currently does not
         run: cargo check --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
 
@@ -98,16 +94,13 @@ jobs:
       - run: sudo apt-get update || exit 1
       - run: sudo apt-get install -y libclang-common-14-dev clang-14 libc6-dev-i386 || exit 1
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@v1
         with:
             toolchain: ${{ needs.prepare.outputs.rust_version }}
-            override: true
-            profile: minimal
-            target: "wasm32-unknown-unknown"
+            targets: "wasm32-unknown-unknown"
       - name: Rust Cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
-      - name: Check bdk wallet
-        working-directory: ./wallet
+      - name: Check WASM
         run: cargo check --target wasm32-unknown-unknown --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
 
   fmt:
@@ -119,11 +112,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@v1
         with:
             toolchain: nightly
-            override: true
-            profile: minimal
             components: rustfmt
       - name: Check fmt
         run: cargo fmt --all --check
@@ -138,43 +129,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@v1
         with:
             toolchain: ${{ needs.prepare.outputs.rust_version }}
             components: clippy
-            override: true
       - name: Rust Cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
-      - uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: Clippy Results
-          args: --all-features --all-targets -- -D warnings
+      - name: Clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
 
-  build-examples:
-    needs: prepare
-    name: Build & Test Examples
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        example-dir:
-          - example_wallet_electrum
-          - example_wallet_esplora_async
-          - example_wallet_esplora_blocking
-          - example_wallet_rpc
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ needs.prepare.outputs.rust_version }}
-          override: true
-          profile: minimal
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0
-      - name: Build
-        working-directory: examples/${{ matrix.example-dir }}
-        run: cargo build
