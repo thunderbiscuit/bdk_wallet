@@ -22,14 +22,13 @@ use alloc::{
 use core::{cmp::Ordering, fmt, mem, ops::Deref};
 
 use bdk_chain::{
-    indexed_tx_graph,
-    indexer::keychain_txout::KeychainTxOutIndex,
+    indexer::keychain_txout::{self, KeychainTxOutIndex, DEFAULT_LOOKAHEAD},
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
         FullScanRequest, FullScanRequestBuilder, FullScanResponse, SyncRequest, SyncRequestBuilder,
         SyncResponse,
     },
-    tx_graph::{CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
+    tx_graph::{self, CalculateFeeError, CanonicalTx, TxGraph, TxUpdate},
     BlockId, CanonicalizationParams, ChainPosition, ConfirmationBlockTime, DescriptorExt,
     FullTxOut, Indexed, IndexedTxGraph, Indexer, Merge,
 };
@@ -59,12 +58,12 @@ pub mod signer;
 pub mod tx_builder;
 pub(crate) mod utils;
 
-use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
     check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
     DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
     Policy, XKeyUtils,
 };
+use crate::keyring::KeyRing;
 use crate::psbt::PsbtUtils;
 use crate::types::*;
 use crate::wallet::{
@@ -73,6 +72,10 @@ use crate::wallet::{
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     // tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
+};
+use crate::{
+    collections::{BTreeMap, HashMap, HashSet},
+    keyring,
 };
 
 // re-exports
@@ -83,32 +86,28 @@ pub use persisted::*;
 pub use utils::IsDust;
 pub use utils::TxDetails;
 
+type KeychainTxGraph<K> = IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>;
+
 /// A Bitcoin wallet
 ///
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
-/// transactions. Its main components are:
-///
-/// 1. output *descriptors* from which it can derive addresses.
-/// 2. [`signer`]s that can contribute signatures to addresses instantiated from the descriptors.
+/// transactions. Its main component is a [`KeyRing`] which holds the network and output
+/// descriptors.
 ///
 /// The user is responsible for loading and writing wallet changes which are represented as
 /// [`ChangeSet`]s (see [`take_staged`]). Also see individual functions and example for instructions
 /// on when [`Wallet`] state needs to be persisted.
 ///
-/// The `Wallet` descriptor (external) and change descriptor (internal) must not derive the same
-/// script pubkeys. See [`KeychainTxOutIndex::insert_descriptor()`] for more details.
+/// The `Wallet` descriptors must not derive the same script pubkeys.
+/// See [`KeychainTxOutIndex::insert_descriptor()`] for more details.
 ///
-/// [`signer`]: crate::signer
 /// [`take_staged`]: Wallet::take_staged
 #[derive(Debug)]
-pub struct Wallet {
-    signers: Arc<SignersContainer>,
-    change_signers: Arc<SignersContainer>,
+pub struct Wallet<K: Ord> {
+    keyring: KeyRing<K>,
     chain: LocalChain,
-    indexed_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
-    stage: ChangeSet,
-    network: Network,
-    secp: SecpCtx,
+    tx_graph: KeychainTxGraph<K>,
+    stage: ChangeSet<K>,
 }
 
 /// An update to [`Wallet`].
