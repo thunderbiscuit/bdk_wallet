@@ -354,6 +354,50 @@ where
         }
     }
 
+    /// Construct a new [`Wallet`] with the given `keyring`, `genesis_hash` and `lookahead`.
+    ///
+    /// The `genesis_hash` (if not specified) will be inferred from `keyring.network` and
+    /// `DEFAULT_LOOKAHEAD` will be used in case `lookahead` is not specified.
+    pub fn with_custom_params(
+        mut keyring: KeyRing<K>,
+        genesis_hash: Option<BlockHash>,
+        lookahead: Option<u32>,
+        use_spk_cache: bool,
+    ) -> Self {
+        let network = keyring.network;
+        let genesis_inferred = bitcoin::constants::genesis_block(network).block_hash();
+
+        let (chain, chain_changeset) =
+            LocalChain::from_genesis_hash(genesis_hash.unwrap_or(genesis_inferred));
+
+        let mut index =
+            KeychainTxOutIndex::new(lookahead.unwrap_or(DEFAULT_LOOKAHEAD), use_spk_cache);
+
+        let descriptors = core::mem::take(&mut keyring.descriptors);
+        for (keychain, desc) in descriptors {
+            let _inserted = index
+                .insert_descriptor(keychain, desc)
+                .expect("err: failed to insert descriptor");
+            assert!(_inserted);
+        }
+
+        let tx_graph = KeychainTxGraph::new(index);
+
+        let stage = ChangeSet {
+            keyring: keyring.initial_changeset(),
+            local_chain: chain_changeset,
+            tx_graph: bdk_chain::tx_graph::ChangeSet::default(),
+            indexer: bdk_chain::keychain_txout::ChangeSet::default(),
+        };
+
+        Self {
+            keyring,
+            chain,
+            tx_graph,
+            stage,
+        }
+    }
+
     /// Reveal the next address of the default `keychain`.
     ///
     /// This is equivalent to calling [`Self::reveal_next_address`] with the default `keychain` as
