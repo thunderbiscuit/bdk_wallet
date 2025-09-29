@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 type IndexedTxGraphChangeSet =
     indexed_tx_graph::ChangeSet<ConfirmationBlockTime, keychain_txout::ChangeSet>;
 
+use crate::keyring;
+
 /// A change set for [`Wallet`]
 ///
 /// ## Definition
@@ -101,14 +103,10 @@ type IndexedTxGraphChangeSet =
 /// [`WalletPersister`]: crate::WalletPersister
 /// [`Wallet::staged`]: crate::Wallet::staged
 /// [`Wallet`]: crate::Wallet
-#[derive(Default, Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct ChangeSet {
-    /// Descriptor for recipient addresses.
-    pub descriptor: Option<Descriptor<DescriptorPublicKey>>,
-    /// Descriptor for change addresses.
-    pub change_descriptor: Option<Descriptor<DescriptorPublicKey>>,
-    /// Stores the network type of the transaction data.
-    pub network: Option<bitcoin::Network>,
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ChangeSet<K: Ord> {
+    /// Stores the `KeyRing` containing the network and descriptor data.
+    pub keyring: keyring::changeset::ChangeSet<K>,
     /// Changes to the [`LocalChain`](local_chain::LocalChain).
     pub local_chain: local_chain::ChangeSet,
     /// Changes to [`TxGraph`](tx_graph::TxGraph).
@@ -117,41 +115,34 @@ pub struct ChangeSet {
     pub indexer: keychain_txout::ChangeSet,
 }
 
-impl Merge for ChangeSet {
+impl<K> Default for ChangeSet<K>
+where
+    K: Ord,
+{
+    fn default() -> Self {
+        Self {
+            keyring: Default::default(),
+            local_chain: Default::default(),
+            tx_graph: Default::default(),
+            indexer: Default::default(),
+        }
+    }
+}
+
+impl<K> Merge for ChangeSet<K>
+where
+    K: Ord,
+{
     /// Merge another [`ChangeSet`] into itself.
     fn merge(&mut self, other: Self) {
-        if other.descriptor.is_some() {
-            debug_assert!(
-                self.descriptor.is_none() || self.descriptor == other.descriptor,
-                "descriptor must never change"
-            );
-            self.descriptor = other.descriptor;
-        }
-        if other.change_descriptor.is_some() {
-            debug_assert!(
-                self.change_descriptor.is_none()
-                    || self.change_descriptor == other.change_descriptor,
-                "change descriptor must never change"
-            );
-            self.change_descriptor = other.change_descriptor;
-        }
-        if other.network.is_some() {
-            debug_assert!(
-                self.network.is_none() || self.network == other.network,
-                "network must never change"
-            );
-            self.network = other.network;
-        }
-
+        Merge::merge(&mut self.keyring, other.keyring);
         Merge::merge(&mut self.local_chain, other.local_chain);
         Merge::merge(&mut self.tx_graph, other.tx_graph);
         Merge::merge(&mut self.indexer, other.indexer);
     }
 
     fn is_empty(&self) -> bool {
-        self.descriptor.is_none()
-            && self.change_descriptor.is_none()
-            && self.network.is_none()
+        self.keyring.is_empty()
             && self.local_chain.is_empty()
             && self.tx_graph.is_empty()
             && self.indexer.is_empty()
@@ -276,7 +267,7 @@ impl Merge for ChangeSet {
 //     }
 // }
 
-impl From<local_chain::ChangeSet> for ChangeSet {
+impl<K: Ord> From<local_chain::ChangeSet> for ChangeSet<K> {
     fn from(chain: local_chain::ChangeSet) -> Self {
         Self {
             local_chain: chain,
@@ -285,7 +276,7 @@ impl From<local_chain::ChangeSet> for ChangeSet {
     }
 }
 
-impl From<IndexedTxGraphChangeSet> for ChangeSet {
+impl<K: Ord> From<IndexedTxGraphChangeSet> for ChangeSet<K> {
     fn from(indexed_tx_graph: IndexedTxGraphChangeSet) -> Self {
         Self {
             tx_graph: indexed_tx_graph.tx_graph,
@@ -295,7 +286,7 @@ impl From<IndexedTxGraphChangeSet> for ChangeSet {
     }
 }
 
-impl From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet {
+impl<K: Ord> From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet<K> {
     fn from(tx_graph: tx_graph::ChangeSet<ConfirmationBlockTime>) -> Self {
         Self {
             tx_graph,
@@ -304,7 +295,7 @@ impl From<tx_graph::ChangeSet<ConfirmationBlockTime>> for ChangeSet {
     }
 }
 
-impl From<keychain_txout::ChangeSet> for ChangeSet {
+impl<K: Ord> From<keychain_txout::ChangeSet> for ChangeSet<K> {
     fn from(indexer: keychain_txout::ChangeSet) -> Self {
         Self {
             indexer,
