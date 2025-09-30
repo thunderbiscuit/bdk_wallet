@@ -21,7 +21,7 @@ jobs:
           - --all-features
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
@@ -51,7 +51,7 @@ jobs:
           - --all-features
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
@@ -90,7 +90,7 @@ jobs:
       CFLAGS: -I/usr/include
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
         # Install a recent version of clang that supports wasm32
@@ -113,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
@@ -131,7 +131,7 @@ jobs:
       checks: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml

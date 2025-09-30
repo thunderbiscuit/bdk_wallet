@@ -5,3 +5,4 @@ rules:
       policies:
         # Allow pin by ref/tag
         actions-rust-lang/setup-rust-toolchain: ref-pin
+        actions/*: ref-pin
