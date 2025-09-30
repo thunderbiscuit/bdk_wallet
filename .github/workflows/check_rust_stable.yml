@@ -1,0 +1,44 @@
+name: Check Rust Stable
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write  # Needed to open an issue
+
+jobs:
+  check:
+    name: Check Rust Version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Check the version
+        run: |
+          RUST_STABLE=$(rustc --verbose --version | sed -ne 's/^release: //p')
+          CURRENT_RUST=$(grep '^channel' rust-toolchain.toml | cut -d '"' -f2)
+          echo "Rust compiler stable: $RUST_STABLE"
+          echo "Our current toolchain: $CURRENT_RUST"
+          if [[ "$CURRENT_RUST" != "$RUST_STABLE" ]]; then
+            echo "Rust versions are not the same!"
+            echo "open_issue=true" >> $GITHUB_ENV
+          fi
+
+      - name: Create issue
+        if: env.open_issue == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Update Rust Toolchain To Stable" \
+            --body "The current version of the Rust compiler defined in rust-toolchain.toml should be updated to the latest stable release."
