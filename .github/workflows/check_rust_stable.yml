@@ -1,0 +1,48 @@
+name: Check Default Toolchain
+
+# This workflow checks that our default toolchain (defined in rust-toolchain.toml) is in line with
+# the current version of Rust stable and opens an issue if not.
+
+on:
+  schedule:
+    - cron: "0 0 15 * *" # At 00:00 on the 15th each month
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write  # Needed to open an issue
+
+jobs:
+  check:
+    name: Check Rust Version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Compare the two versions
+        run: |
+          RUST_STABLE=$(rustc --verbose --version | sed -ne 's/^release: //p')
+          CURRENT_RUST=$(grep '^channel' rust-toolchain.toml | cut -d '"' -f2)
+          if [[ "$CURRENT_RUST" != "$RUST_STABLE" ]]; then
+            echo "Rust versions are not the same! Opening an issue to remind devs to bump."
+            echo "RUST_STABLE=$RUST_STABLE" >> $GITHUB_ENV
+            echo "OPEN_ISSUE=true" >> $GITHUB_ENV
+          fi
+
+      - name: Create an issue if required
+        if: env.OPEN_ISSUE == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Update Rust Toolchain To Stable" \
+            --body "The version of the Rust compiler defined in `rust-toolchain.toml` should be updated to the latest stable release, ${{ env.RUST_STABLE }}."
