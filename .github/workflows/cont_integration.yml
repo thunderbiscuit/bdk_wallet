@@ -1,5 +1,9 @@
 on: [push, pull_request]
 
+# Main continuous integration workflow that runs build, test, and code quality checks.
+# Runs on every push and pull request, testing against both MSRV (1.85) and stable Rust.
+# Includes no_std and WASM compatibility checks, formatting validation, and clippy linting.
+
 name: CI
 
 permissions: {}

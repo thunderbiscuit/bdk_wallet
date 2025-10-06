@@ -1,6 +1,10 @@
-on: [push, pull_request]
-
 name: Code Coverage
+
+# Generates code coverage reports using grcov and uploads results to Coveralls.
+# Runs on every push and pull request to track test coverage metrics.
+# Uploads coverage data to Coveralls for tracking and produces an HTML report artifact for download.
+
+on: [push, pull_request]
 
 permissions: {}
 
