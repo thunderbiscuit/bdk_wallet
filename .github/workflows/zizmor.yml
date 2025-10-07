@@ -1,5 +1,10 @@
 name: Zizmor Actions Analysis
 
+# Analyzes GitHub Actions workflows for security vulnerabilities using zizmor.
+# Runs on pushes to master and all pull requests to detect potential security issues
+# in workflow configurations. Results are uploaded to GitHub's security dashboard.
+# The .github/zizmor.yml file configures the rules this action will check against.
+
 on:
   push:
     branches: ["master"]
@@ -12,8 +17,8 @@ jobs:
     permissions:
       security-events: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
 

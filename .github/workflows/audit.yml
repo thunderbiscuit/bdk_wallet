@@ -1,5 +1,9 @@
 name: Audit
 
+# Performs a security audit of Rust dependencies using cargo-audit through the actions-rust-lang/audit action.
+# Runs nightly on schedule and when Cargo.toml, Cargo.lock, or audit.toml files are modified.
+# Helps identify known security vulnerabilities in the dependency tree.
+
 on:
   push:
     paths:
@@ -23,7 +27,8 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           persist-credentials: false
       - uses: actions-rust-lang/audit@v1
