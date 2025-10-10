@@ -59,9 +59,16 @@ pub mod tx_builder;
 pub(crate) mod utils;
 
 use crate::descriptor::{
-    check_wallet_descriptor, error::Error as DescriptorError, policy::BuildSatisfaction,
-    DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
-    Policy, XKeyUtils,
+    check_wallet_descriptor,
+    error::Error as DescriptorError,
+    // policy::BuildSatisfaction,
+    DerivedDescriptor,
+    DescriptorMeta,
+    ExtendedDescriptor,
+    // ExtractPolicy,
+    IntoWalletDescriptor,
+    // Policy,
+    XKeyUtils,
 };
 use crate::keyring::KeyRing;
 use crate::psbt::PsbtUtils;
