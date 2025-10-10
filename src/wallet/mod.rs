@@ -3009,10 +3009,10 @@ mod test {
     fn test_keyring(desc_strs: impl IntoIterator<Item = &'static str>) -> KeyRing<DescriptorId> {
         let mut desc_strs = desc_strs.into_iter();
         let desc = parse_descriptor(desc_strs.next().unwrap());
-        let mut keyring = KeyRing::new(Network::Testnet4, desc.descriptor_id(), desc);
+        let mut keyring = KeyRing::new(Network::Testnet4, desc.descriptor_id(), desc).unwrap();
         for desc_str in desc_strs {
             let desc = parse_descriptor(desc_str);
-            keyring.add_descriptor(desc.descriptor_id(), desc, false);
+            let _ = keyring.add_descriptor(desc.descriptor_id(), desc, false);
         }
         keyring
     }

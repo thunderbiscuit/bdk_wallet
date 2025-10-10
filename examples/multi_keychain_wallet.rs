@@ -58,11 +58,12 @@ fn main() {
         time_of_week_keychain: DayType::AnyDay,
     };
 
-    let mut keyring: KeyRing<KeychainId> = KeyRing::new(Network::Signet, keychain_1, DESC_1);
-    keyring.add_descriptor(keychain_2, DESC_2, false);
-    keyring.add_descriptor(keychain_3, DESC_3, false);
-    keyring.add_descriptor(keychain_4, DESC_4, false);
-    keyring.add_descriptor(keychain_5, DESC_5, false);
+    let mut keyring: KeyRing<KeychainId> =
+        KeyRing::new(Network::Signet, keychain_1, DESC_1).unwrap();
+    keyring.add_descriptor(keychain_2, DESC_2, false).unwrap();
+    keyring.add_descriptor(keychain_3, DESC_3, false).unwrap();
+    keyring.add_descriptor(keychain_4, DESC_4, false).unwrap();
+    keyring.add_descriptor(keychain_5, DESC_5, false).unwrap();
 
     // DESC_1 is the default keychain (the first one added to the keyring is automatically the
     // default keychain), but this can also be changed later on with the

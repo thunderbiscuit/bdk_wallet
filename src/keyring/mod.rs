@@ -16,7 +16,8 @@
 /// Contains `Changeset` corresponding to `KeyRing`.
 pub mod changeset;
 
-use crate::descriptor::IntoWalletDescriptor;
+use crate::descriptor::check_wallet_descriptor;
+use crate::descriptor::{DescriptorError, IntoWalletDescriptor};
 use crate::keyring::changeset::ChangeSet;
 use alloc::collections::BTreeMap;
 use bitcoin::secp256k1::{All, Secp256k1};
@@ -38,46 +39,65 @@ where
 {
     /// Construct a new [`KeyRing`] with the provided `network` and a descriptor. This descriptor
     /// will automatically become your default keychain. You can change your default keychain
-    /// upon adding new ones with [`KeyRing::add_descriptor`]. Note that you cannot use a
-    /// multipath descriptor here.
-    pub fn new(network: Network, keychain: K, descriptor: impl IntoWalletDescriptor) -> Self {
+    /// upon adding new ones with [`KeyRing::add_descriptor`].
+    ///
+    /// This method returns [`DescriptorError`] if the provided descriptor is multipath , contains
+    /// hardened derivation steps (in case of public descriptors) or fails miniscripts sanity
+    /// checks.
+    pub fn new(
+        network: Network,
+        keychain: K,
+        descriptor: impl IntoWalletDescriptor,
+    ) -> Result<Self, DescriptorError> {
         let secp = Secp256k1::new();
-        let descriptor = descriptor
-            .into_wallet_descriptor(&secp, network.into())
-            .expect("err: invalid descriptor")
-            .0;
-        assert!(
-            !descriptor.is_multipath(),
-            "err: Use `add_multipath_descriptor` instead"
-        );
-        Self {
+        let descriptor = descriptor.into_wallet_descriptor(&secp, network.into())?.0;
+        check_wallet_descriptor(&descriptor)?;
+        Ok(Self {
             secp: Secp256k1::new(),
             network,
             descriptors: BTreeMap::from([(keychain.clone(), descriptor)]),
             default_keychain: keychain.clone(),
-        }
+        })
     }
 
     /// Add a descriptor. Must not be [multipath](miniscript::Descriptor::is_multipath).
+    /// This method returns [`DescriptorError`] if the provided descriptor is multipath, contains
+    /// hardened derivation steps (in case of public descriptors) or fails miniscripts sanity
+    /// checks. It also returns the error when exactly one of `keychain` or `descriptor` is
+    /// already in the keyring.
     pub fn add_descriptor(
         &mut self,
         keychain: K,
         descriptor: impl IntoWalletDescriptor,
         default: bool,
-    ) {
+    ) -> Result<ChangeSet<K>, DescriptorError> {
         let descriptor = descriptor
-            .into_wallet_descriptor(&self.secp, self.network.into())
-            .expect("err: invalid descriptor")
+            .into_wallet_descriptor(&self.secp, self.network.into())?
             .0;
-        assert!(
-            !descriptor.is_multipath(),
-            "err: Use `add_multipath_descriptor` instead"
-        );
+        check_wallet_descriptor(&descriptor)?;
+
+        // if the descriptor or keychain already exist
+        for (keychain_old, desc) in self.descriptors.iter() {
+            if (desc == &descriptor) && (keychain_old != &keychain) {
+                return Err(DescriptorError::DescAlreadyExists);
+            }
+            if (keychain_old == &keychain) && (desc != &descriptor) {
+                return Err(DescriptorError::KeychainAlreadyExists);
+            }
+        }
+
+        self.descriptors
+            .insert(keychain.clone(), descriptor.clone());
+
+        let mut changeset = ChangeSet::default();
+        changeset.descriptors.insert(keychain.clone(), descriptor);
 
         if default {
             self.default_keychain = keychain.clone();
+            changeset.default_keychain = Some(keychain);
         }
-        self.descriptors.insert(keychain, descriptor);
+
+        Ok(changeset)
     }
 
     /// Returns the specified default keychain on the KeyRing.
