@@ -13,8 +13,11 @@ fn main() {
         Network::Regtest,
         KeychainKind::External,
         EXTERNAL_DESCRIPTOR,
-    );
-    keyring.add_descriptor(KeychainKind::Internal, INTERNAL_DESCRIPTOR, false);
+    )
+    .unwrap();
+    keyring
+        .add_descriptor(KeychainKind::Internal, INTERNAL_DESCRIPTOR, false)
+        .unwrap();
 
     let mut wallet = Wallet::new(keyring);
     let address = wallet.reveal_next_address(KeychainKind::External).unwrap();
