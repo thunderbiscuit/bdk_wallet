@@ -28,7 +28,6 @@ pub enum Error {
     Key(crate::keys::KeyError),
     // /// Error while extracting and manipulating policies
     // Policy(crate::descriptor::policy::PolicyError),
-
     /// Invalid byte found in the descriptor checksum
     InvalidDescriptorCharacter(u8),
 
@@ -42,8 +41,10 @@ pub enum Error {
     Miniscript(miniscript::Error),
     /// Hex decoding error
     Hex(bitcoin::hex::HexToBytesError),
-    /// The provided wallet descriptors are identical
-    ExternalAndInternalAreTheSame,
+    /// The keychain exists in the `KeyRing` but mapped to a different descriptor
+    KeychainAlreadyExists,
+    /// The descriptor exists in the `KeyRing` but mapped to a different keychain
+    DescAlreadyExists,
 }
 
 impl From<crate::keys::KeyError> for Error {
@@ -81,9 +82,8 @@ impl fmt::Display for Error {
             Self::Pk(err) => write!(f, "Key-related error: {err}"),
             Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
             Self::Hex(err) => write!(f, "Hex decoding error: {err}"),
-            Self::ExternalAndInternalAreTheSame => {
-                write!(f, "External and internal descriptors are the same")
-            }
+            Self::KeychainAlreadyExists => write!(f, "Keychain already exists but corresponds to a different descriptor"),
+            Self::DescAlreadyExists => write!(f, "Descriptor already exists but corresponds to a different keychain"),
         }
     }
 }
