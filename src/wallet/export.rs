@@ -115,6 +115,24 @@
 //! # assert_eq!(internal, "wsh(sortedmulti(2,[73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48'/0'/0'/2']tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))#cmcnua7a");
 //! # Ok::<_, Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! ## Important Notes on Import/Export Operations
+//!
+//! ### One-Way Operations
+//!
+//! The Caravan export/import functionality is designed for **one-way operations**:
+//!
+//! 1. **Export**: `Wallet → CaravanExport` (for sharing with Caravan)
+//! 2. **Import**: `JSON → CaravanExport → to_descriptors` (for importing from Caravan)
+//!
+//! ### Round-Trip Limitation
+//!
+//! **Note**: Full round-trip operations (`Descriptor → Wallet → CaravanExport → to_descriptors`)
+//! will **not** produce identical descriptors due to how derivation paths are processed for
+//! Caravan compatibility. This is expected behavior and not a bug.
+//!
+//! If you need to preserve the exact original descriptor format, store it separately
+//! rather than relying on round-trip conversion.
 
 use alloc::string::String;
 use alloc::string::ToString;
