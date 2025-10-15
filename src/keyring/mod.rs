@@ -15,10 +15,16 @@
 
 /// Contains `Changeset` corresponding to `KeyRing`.
 pub mod changeset;
+/// Contains error types corresponding to `KeyRing`.
+pub mod error;
 
+pub use changeset::ChangeSet;
+pub use error::{LoadError, LoadMismatch};
+
+use crate::chain::{DescriptorExt, Merge};
 use crate::descriptor::check_wallet_descriptor;
 use crate::descriptor::{DescriptorError, IntoWalletDescriptor};
-use crate::keyring::changeset::ChangeSet;
+use crate::wallet::DescriptorToExtract;
 use alloc::collections::BTreeMap;
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::Network;
@@ -124,13 +130,78 @@ where
         }
     }
 
-    /// Construct from changeset.
-    pub fn from_changeset(changeset: ChangeSet<K>) -> Option<Self> {
-        Some(Self {
+    /// Construct `KeyRing` from changeset.
+    pub fn from_changeset(
+        changeset: ChangeSet<K>,
+        check_network: Option<bitcoin::Network>,
+        check_descs: BTreeMap<K, Option<DescriptorToExtract>>, /* none means just check if
+                                                                * keychain is there. */
+        check_default: Option<K>,
+    ) -> Result<Option<Self>, LoadError<K>> {
+        if changeset.is_empty() {
+            return Ok(None);
+        }
+        let secp = Secp256k1::new();
+
+        // check network is present
+        let loaded_network = changeset.network.ok_or(LoadError::MissingNetwork)?;
+
+        // check network is as expected
+        if let Some(expected_network) = check_network {
+            if loaded_network != expected_network {
+                return Err(LoadError::Mismatch(LoadMismatch::Network {
+                    loaded: loaded_network,
+                    expected: expected_network,
+                }));
+            }
+        }
+
+        // check the descriptors are valid
+        for desc in changeset.descriptors.values() {
+            check_wallet_descriptor(desc)?;
+        }
+
+        // check expected descriptors are present
+        for (keychain, check_desc) in check_descs {
+            match changeset.descriptors.get(&keychain) {
+                None => Err(LoadError::MissingKeychain(keychain))?,
+                Some(loaded_desc) => {
+                    if let Some(make_desc) = check_desc {
+                        let (exp_desc, _) = make_desc(&secp, loaded_network.into())?;
+                        if exp_desc.descriptor_id() != loaded_desc.descriptor_id() {
+                            Err(LoadMismatch::Descriptor {
+                                keychain,
+                                loaded: loaded_desc.clone(),
+                                expected: exp_desc,
+                            })?
+                        }
+                    }
+                }
+            }
+        }
+
+        // check if default keychain is present and loaded correctly.
+        match &changeset.default_keychain {
+            None => Err(LoadError::MissingDefaultKeychain)?,
+            Some(loaded) => {
+                if let Some(expected) = check_default {
+                    if *loaded != expected {
+                        Err(LoadMismatch::DefaultKeychain {
+                            loaded: loaded.clone(),
+                            expected,
+                        })?
+                    }
+                }
+            }
+        }
+
+        Ok(Some(Self {
             secp: Secp256k1::new(),
-            network: changeset.network?,
+            network: loaded_network,
             descriptors: changeset.descriptors,
-            default_keychain: changeset.default_keychain?,
-        })
+            default_keychain: changeset
+                .default_keychain
+                .expect("checked few lines back that default_keychain is not None "),
+        }))
     }
 }

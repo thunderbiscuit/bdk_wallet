@@ -333,14 +333,14 @@ type FutureResult<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send +
 
 /// Error type for [`PersistedWallet::load`].
 #[derive(Debug, PartialEq)]
-pub enum LoadWithPersistError<E> {
+pub enum LoadWithPersistError<E, K> {
     /// Error from persistence.
     Persist(E),
     /// Occurs when the loaded changeset cannot construct [`Wallet`].
-    InvalidChangeSet(crate::LoadError),
+    InvalidChangeSet(crate::LoadError<K>),
 }
 
-impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
+impl<E: fmt::Display, K: fmt::Display> fmt::Display for LoadWithPersistError<E, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Persist(err) => fmt::Display::fmt(err, f),
@@ -350,7 +350,10 @@ impl<E: fmt::Display> fmt::Display for LoadWithPersistError<E> {
 }
 
 #[cfg(feature = "std")]
-impl<E: fmt::Debug + fmt::Display> std::error::Error for LoadWithPersistError<E> {}
+impl<E: fmt::Debug + fmt::Display, K: fmt::Debug + fmt::Display> std::error::Error
+    for LoadWithPersistError<E, K>
+{
+}
 
 // /// Error type for [`PersistedWallet::create`].
 // #[derive(Debug)]

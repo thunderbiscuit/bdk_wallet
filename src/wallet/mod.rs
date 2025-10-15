@@ -19,7 +19,12 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use core::{cmp::Ordering, fmt, mem, ops::Deref};
+use core::{
+    cmp::Ordering,
+    fmt::{self, Debug},
+    mem,
+    ops::Deref,
+};
 
 use bdk_chain::{
     indexer::keychain_txout::{self, KeychainTxOutIndex, DEFAULT_LOOKAHEAD},
@@ -181,39 +186,45 @@ impl<K> fmt::Display for AddressInfo<K> {
 
 /// The error type when loading a [`Wallet`] from a [`ChangeSet`].
 #[derive(Debug, PartialEq)]
-pub enum LoadError {
-    /// There was a problem with the passed-in descriptor(s).
-    Descriptor(crate::descriptor::DescriptorError),
-    /// Data loaded from persistence is missing network type.
-    MissingNetwork,
+pub enum LoadError<K> {
     /// Data loaded from persistence is missing genesis hash.
     MissingGenesis,
-    /// Data loaded from persistence is missing descriptor.
-    MissingDescriptor(KeychainKind),
-    /// Data loaded is unexpected.
-    Mismatch(LoadMismatch),
+    /// Data loaded has invalid [`KeyRing`].
+    Keyring(keyring::LoadError<K>),
+    /// Genesis hash is not as expected.
+    GenesisMismatch {
+        /// The genesis hash that is loaded.
+        loaded: BlockHash,
+        /// The expected genesis hash.
+        expected: BlockHash,
+    },
+    /// Loaded `KeyRing` is empty.
+    EmptyKeyring,
 }
 
-impl fmt::Display for LoadError {
+impl<K> fmt::Display for LoadError<K>
+where
+    K: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoadError::Descriptor(e) => e.fmt(f),
-            LoadError::MissingNetwork => write!(f, "loaded data is missing network type"),
+            LoadError::Keyring(e) => e.fmt(f),
             LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
-            LoadError::MissingDescriptor(k) => {
-                write!(f, "loaded data is missing descriptor for {k} keychain")
-            }
-            LoadError::Mismatch(e) => write!(f, "{e}"),
+            LoadError::GenesisMismatch { loaded, expected } => write!(
+                f,
+                "Genesis hash mismatch: loaded {loaded}, expected {expected}"
+            ),
+            LoadError::EmptyKeyring => write!(f, "Loaded keyring is empty"),
         }
     }
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for LoadError {}
+impl<K> std::error::Error for LoadError<K> where K: fmt::Display + fmt::Debug {}
 
-/// Represents a mismatch with what is loaded and what is expected from [`LoadParams`].
+/// Represents a mismatch with what is loaded and what is expected.
 #[derive(Debug, PartialEq)]
-pub enum LoadMismatch {
+pub enum LoadMismatch<K> {
     /// Network does not match.
     Network {
         /// The network that is loaded.
@@ -231,7 +242,7 @@ pub enum LoadMismatch {
     /// Descriptor's [`DescriptorId`](bdk_chain::DescriptorId) does not match.
     Descriptor {
         /// Keychain identifying the descriptor.
-        keychain: KeychainKind,
+        keychain: K,
         /// The loaded descriptor.
         loaded: Option<ExtendedDescriptor>,
         /// The expected descriptor.
@@ -239,7 +250,10 @@ pub enum LoadMismatch {
     },
 }
 
-impl fmt::Display for LoadMismatch {
+impl<K> fmt::Display for LoadMismatch<K>
+where
+    K: fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadMismatch::Network { loaded, expected } => {
@@ -272,15 +286,9 @@ impl fmt::Display for LoadMismatch {
     }
 }
 
-impl From<LoadMismatch> for LoadError {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::Mismatch(mismatch)
-    }
-}
-
-impl<E> From<LoadMismatch> for LoadWithPersistError<E> {
-    fn from(mismatch: LoadMismatch) -> Self {
-        Self::InvalidChangeSet(LoadError::Mismatch(mismatch))
+impl<K> From<crate::keyring::error::LoadError<K>> for LoadError<K> {
+    fn from(err: crate::keyring::error::LoadError<K>) -> Self {
+        LoadError::Keyring(err)
     }
 }
 
@@ -301,7 +309,7 @@ pub enum ApplyBlockError {
 impl fmt::Display for ApplyBlockError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApplyBlockError::CannotConnect(err) => err.fmt(f),
+            ApplyBlockError::CannotConnect(err) => write!(f,"{err}"),
             ApplyBlockError::UnexpectedConnectedToHash {
                 expected_hash: block_hash,
                 connected_to_hash: checkpoint_hash,
@@ -474,6 +482,55 @@ where
                 .expect("must have address form"),
             keychain,
         })
+    }
+
+    /// Construct a [`Wallet`] from a [`ChangeSet`]
+    pub fn from_changeset(
+        changeset: ChangeSet<K>,
+        params: LoadParams<K>,
+    ) -> Result<Option<Self>, LoadError<K>> {
+        if changeset.is_empty() {
+            return Ok(None);
+        }
+
+        let keyring = KeyRing::from_changeset(
+            changeset.keyring,
+            params.check_network,
+            params.check_descs,
+            params.check_default,
+        )?
+        .ok_or(LoadError::EmptyKeyring)?;
+
+        let local_chain = LocalChain::from_changeset(changeset.local_chain)
+            .map_err(|_| LoadError::MissingGenesis)?;
+
+        if let Some(exp_genesis_hash) = params.check_genesis_hash {
+            if exp_genesis_hash != local_chain.genesis_hash() {
+                Err(LoadError::GenesisMismatch {
+                    loaded: local_chain.genesis_hash(),
+                    expected: exp_genesis_hash,
+                })?
+            }
+        }
+
+        let mut stage = ChangeSet::default();
+
+        let indexed_graph = make_indexed_graph(
+            &mut stage,
+            changeset.tx_graph,
+            changeset.indexer,
+            keyring.descriptors.clone(),
+            params.lookahead,
+            params.use_spk_cache,
+        )
+        .map_err(keyring::LoadError::Descriptor)?;
+
+        Ok(Some(Wallet {
+            keyring,
+            chain: local_chain,
+            tx_graph: indexed_graph,
+            stage,
+        }))
     }
 }
 
@@ -2868,62 +2925,50 @@ fn new_local_utxo(
     }
 }
 
-// fn make_indexed_graph(
-//     stage: &mut ChangeSet,
-//     tx_graph_changeset: chain::tx_graph::ChangeSet<ConfirmationBlockTime>,
-//     indexer_changeset: chain::keychain_txout::ChangeSet,
-//     descriptor: ExtendedDescriptor,
-//     change_descriptor: Option<ExtendedDescriptor>,
-//     lookahead: u32,
-//     use_spk_cache: bool,
-// ) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
-// DescriptorError> {
-//     let (indexed_graph, changeset) = IndexedTxGraph::from_changeset(
-//         chain::indexed_tx_graph::ChangeSet {
-//             tx_graph: tx_graph_changeset,
-//             indexer: indexer_changeset,
-//         },
-//         |idx_cs| -> Result<KeychainTxOutIndex<KeychainKind>, DescriptorError> {
-//             let mut idx = KeychainTxOutIndex::from_changeset(lookahead, use_spk_cache, idx_cs);
+fn make_indexed_graph<K>(
+    stage: &mut ChangeSet<K>,
+    tx_graph_changeset: chain::tx_graph::ChangeSet<ConfirmationBlockTime>,
+    indexer_changeset: chain::keychain_txout::ChangeSet,
+    descriptors: BTreeMap<K, ExtendedDescriptor>,
+    lookahead: u32,
+    use_spk_cache: bool,
+) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>, DescriptorError>
+where
+    K: Ord + Clone + Debug,
+{
+    let (indexed_graph, changeset) = IndexedTxGraph::from_changeset(
+        chain::indexed_tx_graph::ChangeSet {
+            tx_graph: tx_graph_changeset,
+            indexer: indexer_changeset,
+        },
+        |idx_cs| -> Result<KeychainTxOutIndex<K>, DescriptorError> {
+            let mut idx = KeychainTxOutIndex::from_changeset(lookahead, use_spk_cache, idx_cs);
 
-//             let descriptor_inserted = idx
-//                 .insert_descriptor(KeychainKind::External, descriptor)
-//                 .expect("already checked to be a unique, wildcard, non-multipath descriptor");
-//             assert!(
-//                 descriptor_inserted,
-//                 "this must be the first time we are seeing this descriptor"
-//             );
+            for (keychain, desc) in descriptors {
+                let _inserted = idx.insert_descriptor(keychain, desc).map_err(|e| {
+                    use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
+                    match e {
+                        InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
+                            DescriptorError::DescAlreadyExists
+                        }
+                        InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
+                            DescriptorError::KeychainAlreadyExists
+                        }
+                    }
+                })?;
+                assert!(
+                    _inserted,
+                    "this must be the first time we are seeing this descriptor"
+                );
+            }
 
-//             let change_descriptor = match change_descriptor {
-//                 Some(change_descriptor) => change_descriptor,
-//                 None => return Ok(idx),
-//             };
-
-//             let change_descriptor_inserted = idx
-//                 .insert_descriptor(KeychainKind::Internal, change_descriptor)
-//                 .map_err(|e| {
-//                     use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
-//                     match e {
-//                         InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
-//                             crate::descriptor::error::Error::ExternalAndInternalAreTheSame
-//                         }
-//                         InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
-//                             unreachable!("this is the first time we're assigning internal")
-//                         }
-//                     }
-//                 })?;
-//             assert!(
-//                 change_descriptor_inserted,
-//                 "this must be the first time we are seeing this descriptor"
-//             );
-
-//             Ok(idx)
-//         },
-//     )?;
-//     stage.tx_graph.merge(changeset.tx_graph);
-//     stage.indexer.merge(changeset.indexer);
-//     Ok(indexed_graph)
-// }
+            Ok(idx)
+        },
+    )?;
+    stage.tx_graph.merge(changeset.tx_graph);
+    stage.indexer.merge(changeset.indexer);
+    Ok(indexed_graph)
+}
 
 /// Transforms a [`FeeRate`] to `f64` with unit as sat/vb.
 #[macro_export]
