@@ -90,6 +90,15 @@ use crate::{
     keyring,
 };
 
+#[cfg(feature = "rusqlite")]
+use bdk_chain::{
+    rusqlite::{
+        self,
+        types::{FromSql, ToSql},
+    },
+    DescriptorId, Impl,
+};
+
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
@@ -289,6 +298,28 @@ where
 impl<K> From<crate::keyring::error::LoadError<K>> for LoadError<K> {
     fn from(err: crate::keyring::error::LoadError<K>) -> Self {
         LoadError::Keyring(err)
+    }
+}
+
+/// Type implementing this trait can be persisted by the Sqlite backend
+#[cfg(feature = "rusqlite")]
+pub trait CanBePersisted: Clone {
+    /// The type implementing `FromSql` and `ToSql` to which our original type can be converted.
+    type Persistable: FromSql + ToSql;
+    /// converts to [`Self::Persistable`] type
+    fn to_persistable(self) -> Self::Persistable;
+    /// recover [`Self`] from [`Self::Persistable`]
+    fn from_persistable(persisted: Self::Persistable) -> Self;
+}
+
+#[cfg(feature = "rusqlite")]
+impl CanBePersisted for DescriptorId {
+    type Persistable = Impl<DescriptorId>;
+    fn to_persistable(self) -> Impl<DescriptorId> {
+        Impl(self)
+    }
+    fn from_persistable(persisted: Impl<DescriptorId>) -> DescriptorId {
+        persisted.0
     }
 }
 
@@ -531,6 +562,52 @@ where
             tx_graph: indexed_graph,
             stage,
         }))
+    }
+
+    /// Get the staged changeset
+    ///
+    /// Returns None if no changes are staged.
+    pub fn staged_changeset(&self) -> Option<&ChangeSet<K>> {
+        if self.stage.is_empty() {
+            None
+        } else {
+            Some(&self.stage)
+        }
+    }
+}
+
+// TODO: replace with `PersistedWallet`
+#[cfg(feature = "rusqlite")]
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + Debug + CanBePersisted,
+{
+    /// Load a wallet from SQLite.
+    pub fn from_sqlite(
+        conn: &mut rusqlite::Connection,
+        params: LoadParams<K>,
+    ) -> rusqlite::Result<Option<Self>> {
+        let tx = conn.transaction()?;
+        let changeset = ChangeSet::initialize(&tx)?;
+        tx.commit()?;
+
+        Ok(changeset.and_then(|c| Self::from_changeset(c, params).unwrap()))
+    }
+
+    /// Persist the wallet to SQLite
+    pub fn persist_to_sqlite(
+        &mut self,
+        conn: &mut rusqlite::Connection,
+    ) -> rusqlite::Result<Option<ChangeSet<K>>> {
+        let db_tx = conn.transaction()?;
+        match self.staged_changeset() {
+            Some(changeset) => {
+                changeset.persist_to_sqlite(&db_tx)?;
+                db_tx.commit()?;
+                Ok(self.stage.take())
+            }
+            None => Ok(None),
+        }
     }
 }
 
