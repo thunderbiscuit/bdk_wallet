@@ -66,6 +66,11 @@ where
         })
     }
 
+    /// Get the [`Network`] corresponding to the [`KeyRing`]
+    pub fn network(&self) -> &Network {
+        &self.network
+    }
+
     /// Add a descriptor. Must not be [multipath](miniscript::Descriptor::is_multipath).
     /// This method returns [`DescriptorError`] if the provided descriptor is multipath, contains
     /// hardened derivation steps (in case of public descriptors) or fails miniscripts sanity
