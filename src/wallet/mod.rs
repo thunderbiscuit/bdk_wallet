@@ -367,37 +367,7 @@ where
     /// Note: The network must be either the mainnet or one of the test networks. Also default value
     /// of lookahead is used with no spk_cache.
     pub fn new(mut keyring: KeyRing<K>) -> Self {
-        let network = keyring.network;
-
-        let genesis_hash = bitcoin::constants::genesis_block(network).block_hash();
-        let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
-
-        let keyring_changeset = keyring.initial_changeset();
-
-        let mut index = KeychainTxOutIndex::new(DEFAULT_LOOKAHEAD, false);
-        let descriptors = core::mem::take(&mut keyring.descriptors);
-        for (keychain, desc) in descriptors {
-            let _inserted = index
-                .insert_descriptor(keychain, desc)
-                .expect("err: failed to insert descriptor");
-            assert!(_inserted);
-        }
-
-        let tx_graph = KeychainTxGraph::new(index);
-
-        let stage = ChangeSet {
-            keyring: keyring_changeset,
-            local_chain: chain_changeset,
-            tx_graph: bdk_chain::tx_graph::ChangeSet::default(),
-            indexer: bdk_chain::keychain_txout::ChangeSet::default(),
-        };
-
-        Self {
-            keyring,
-            chain,
-            tx_graph,
-            stage,
-        }
+        Self::with_custom_params(keyring, None, None, false)
     }
 
     /// Construct a new [`Wallet`] with the given `keyring`, `genesis_hash` and `lookahead`.
