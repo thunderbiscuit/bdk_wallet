@@ -10,6 +10,18 @@ type IndexedTxGraphChangeSet =
 
 use crate::keyring;
 
+#[cfg(feature = "rusqlite")]
+use chain::{
+    rusqlite::{
+        self,
+        types::{FromSql, ToSql},
+    },
+    Impl,
+};
+
+#[cfg(feature = "rusqlite")]
+use crate::CanBePersisted;
+
 /// A change set for [`Wallet`]
 ///
 /// ## Definition
@@ -149,123 +161,57 @@ where
     }
 }
 
-// #[cfg(feature = "rusqlite")]
-// impl ChangeSet {
-//     /// Schema name for wallet.
-//     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
-//     /// Name of table to store wallet descriptors and network.
-//     pub const WALLET_TABLE_NAME: &'static str = "bdk_wallet";
+#[cfg(feature = "rusqlite")]
+impl<K> ChangeSet<K>
+where
+    K: Ord + Clone + CanBePersisted,
+{
+    /// Initialize sqlite tables for wallet tables.
+    pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<()> {
+        keyring::changeset::ChangeSet::<K>::init_sqlite_tables(db_tx)?;
+        bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
+        bdk_chain::tx_graph::ChangeSet::<ConfirmationBlockTime>::init_sqlite_tables(db_tx)?;
+        bdk_chain::keychain_txout::ChangeSet::init_sqlite_tables(db_tx)?;
 
-//     /// Get v0 sqlite [ChangeSet] schema
-//     pub fn schema_v0() -> alloc::string::String {
-//         format!(
-//             "CREATE TABLE {} ( \
-//                 id INTEGER PRIMARY KEY NOT NULL CHECK (id = 0), \
-//                 descriptor TEXT, \
-//                 change_descriptor TEXT, \
-//                 network TEXT \
-//                 ) STRICT;",
-//             Self::WALLET_TABLE_NAME,
-//         )
-//     }
+        Ok(())
+    }
 
-//     /// Initialize sqlite tables for wallet tables.
-//     pub fn init_sqlite_tables(db_tx: &chain::rusqlite::Transaction) ->
-// chain::rusqlite::Result<()> {         crate::rusqlite_impl::migrate_schema(
-//             db_tx,
-//             Self::WALLET_SCHEMA_NAME,
-//             &[&Self::schema_v0()],
-//         )?;
+    /// Recover a [`ChangeSet`] from sqlite database.
+    pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
+        let mut changeset = Self::default();
+        changeset.keyring = keyring::changeset::ChangeSet::from_sqlite(db_tx)?;
+        changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
+        changeset.tx_graph = tx_graph::ChangeSet::<_>::from_sqlite(db_tx)?;
+        changeset.indexer = keychain_txout::ChangeSet::from_sqlite(db_tx)?;
 
-//         bdk_chain::local_chain::ChangeSet::init_sqlite_tables(db_tx)?;
-//         bdk_chain::tx_graph::ChangeSet::<ConfirmationBlockTime>::init_sqlite_tables(db_tx)?;
-//         bdk_chain::keychain_txout::ChangeSet::init_sqlite_tables(db_tx)?;
+        Ok(changeset)
+    }
 
-//         Ok(())
-//     }
+    /// Persist [`ChangeSet`] to sqlite database.
+    pub fn persist_to_sqlite(
+        &self,
+        db_tx: &chain::rusqlite::Transaction,
+    ) -> chain::rusqlite::Result<()> {
+        self.keyring.persist_to_sqlite(db_tx)?;
+        self.local_chain.persist_to_sqlite(db_tx)?;
+        self.tx_graph.persist_to_sqlite(db_tx)?;
+        self.indexer.persist_to_sqlite(db_tx)?;
+        Ok(())
+    }
 
-//     /// Recover a [`ChangeSet`] from sqlite database.
-//     pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
-//         use chain::rusqlite::OptionalExtension;
-//         use chain::Impl;
+    /// Initializes the [`ChangeSet`] from persistence.
+    ///
+    /// Returns Ok(None) if [`ChangeSet`] is empty.
+    pub fn initialize(db_tx: &rusqlite::Transaction) -> rusqlite::Result<Option<Self>> {
+        Self::init_sqlite_tables(db_tx)?;
+        let changeset = Self::from_sqlite(db_tx)?;
 
-//         let mut changeset = Self::default();
-
-//         let mut wallet_statement = db_tx.prepare(&format!(
-//             "SELECT descriptor, change_descriptor, network FROM {}",
-//             Self::WALLET_TABLE_NAME,
-//         ))?;
-//         let row = wallet_statement
-//             .query_row([], |row| {
-//                 Ok((
-//                     row.get::<_, Option<Impl<Descriptor<DescriptorPublicKey>>>>("descriptor")?,
-//                     row.get::<_, Option<Impl<Descriptor<DescriptorPublicKey>>>>(
-//                         "change_descriptor",
-//                     )?,
-//                     row.get::<_, Option<Impl<bitcoin::Network>>>("network")?,
-//                 ))
-//             })
-//             .optional()?;
-//         if let Some((desc, change_desc, network)) = row {
-//             changeset.descriptor = desc.map(Impl::into_inner);
-//             changeset.change_descriptor = change_desc.map(Impl::into_inner);
-//             changeset.network = network.map(Impl::into_inner);
-//         }
-
-//         changeset.local_chain = local_chain::ChangeSet::from_sqlite(db_tx)?;
-//         changeset.tx_graph = tx_graph::ChangeSet::<_>::from_sqlite(db_tx)?;
-//         changeset.indexer = keychain_txout::ChangeSet::from_sqlite(db_tx)?;
-
-//         Ok(changeset)
-//     }
-
-//     /// Persist [`ChangeSet`] to sqlite database.
-//     pub fn persist_to_sqlite(
-//         &self,
-//         db_tx: &chain::rusqlite::Transaction,
-//     ) -> chain::rusqlite::Result<()> {
-//         use chain::rusqlite::named_params;
-//         use chain::Impl;
-
-//         let mut descriptor_statement = db_tx.prepare_cached(&format!(
-//             "INSERT INTO {}(id, descriptor) VALUES(:id, :descriptor) ON CONFLICT(id) DO UPDATE
-// SET descriptor=:descriptor",             Self::WALLET_TABLE_NAME,
-//         ))?;
-//         if let Some(descriptor) = &self.descriptor {
-//             descriptor_statement.execute(named_params! {
-//                 ":id": 0,
-//                 ":descriptor": Impl(descriptor.clone()),
-//             })?;
-//         }
-
-//         let mut change_descriptor_statement = db_tx.prepare_cached(&format!(
-//             "INSERT INTO {}(id, change_descriptor) VALUES(:id, :change_descriptor) ON
-// CONFLICT(id) DO UPDATE SET change_descriptor=:change_descriptor",
-// Self::WALLET_TABLE_NAME,         ))?;
-//         if let Some(change_descriptor) = &self.change_descriptor {
-//             change_descriptor_statement.execute(named_params! {
-//                 ":id": 0,
-//                 ":change_descriptor": Impl(change_descriptor.clone()),
-//             })?;
-//         }
-
-//         let mut network_statement = db_tx.prepare_cached(&format!(
-//             "INSERT INTO {}(id, network) VALUES(:id, :network) ON CONFLICT(id) DO UPDATE SET
-// network=:network",             Self::WALLET_TABLE_NAME,
-//         ))?;
-//         if let Some(network) = self.network {
-//             network_statement.execute(named_params! {
-//                 ":id": 0,
-//                 ":network": Impl(network),
-//             })?;
-//         }
-
-//         self.local_chain.persist_to_sqlite(db_tx)?;
-//         self.tx_graph.persist_to_sqlite(db_tx)?;
-//         self.indexer.persist_to_sqlite(db_tx)?;
-//         Ok(())
-//     }
-// }
+        if changeset.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(changeset))
+    }
+}
 
 impl<K: Ord> From<local_chain::ChangeSet> for ChangeSet<K> {
     fn from(chain: local_chain::ChangeSet) -> Self {

@@ -77,3 +77,4 @@ name = "bitcoind_rpc"
 
 [[example]]
 name = "simple_keyring"
+required-features = ["rusqlite"]
