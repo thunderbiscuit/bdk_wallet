@@ -63,7 +63,7 @@ pub fn test_network_kind() -> ValidNetworkKinds {
     vec![NetworkKind::Test].into_iter().collect()
 }
 /// Compute the intersection of two sets.
-pub fn merge_network_kinds(a: &ValidNetworkKinds, b: &ValidNetworkKinds) -> ValidNetworkKinds {
+pub fn intersect_network_kinds(a: &ValidNetworkKinds, b: &ValidNetworkKinds) -> ValidNetworkKinds {
     a.intersection(b).cloned().collect()
 }
 
@@ -807,7 +807,7 @@ fn expand_multi_keys<Pk: IntoDescriptorKey<Ctx>, Ctx: ScriptContext>(
         (KeyMap::default(), any_network_kind()),
         |(mut keys_acc, netkind_acc), (key, netkind)| {
             keys_acc.extend(key);
-            let netkind_acc = merge_network_kinds(&netkind_acc, &netkind);
+            let netkind_acc = intersect_network_kinds(&netkind_acc, &netkind);
 
             (keys_acc, netkind_acc)
         },

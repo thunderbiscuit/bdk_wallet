@@ -104,7 +104,7 @@ macro_rules! impl_top_level_tr {
                         ValidNetworkKinds,
                     )| {
                         key_map.extend(tree_keymap.into_iter());
-                        valid_network_kinds = $crate::keys::merge_network_kinds(
+                        valid_network_kinds = $crate::keys::intersect_network_kinds(
                             &valid_network_kinds,
                             &tree_network_kinds,
                         );
@@ -220,7 +220,7 @@ macro_rules! impl_node_opcode_two {
 
                 minisc.check_miniscript()?;
 
-                Ok((minisc, a_keymap, $crate::keys::merge_network_kinds(&a_network_kinds, &b_network_kinds)))
+                Ok((minisc, a_keymap, $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds)))
             })
     });
 }
@@ -242,8 +242,8 @@ macro_rules! impl_node_opcode_three {
                 a_keymap.extend(b_keymap.into_iter());
                 a_keymap.extend(c_keymap.into_iter());
 
-                let network_kinds = $crate::keys::merge_network_kinds(&a_network_kinds, &b_network_kinds);
-                let network_kinds = $crate::keys::merge_network_kinds(&network_kinds, &c_network_kinds);
+                let network_kinds = $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds);
+                let network_kinds = $crate::keys::intersect_network_kinds(&network_kinds, &c_network_kinds);
 
                 let minisc = $crate::miniscript::Miniscript::from_ast($crate::miniscript::miniscript::decode::Terminal::$terminal_variant(
                     $crate::alloc::sync::Arc::new(a_minisc),
@@ -294,7 +294,7 @@ macro_rules! parse_tap_tree {
             .and_then(|tree_a| Ok((tree_a, $tree_b?)))
             .and_then(|((a_tree, mut a_keymap, a_network_kinds), (b_tree, b_keymap, b_network_kinds))| {
                 a_keymap.extend(b_keymap.into_iter());
-                Ok((TapTree::combine(a_tree, b_tree), a_keymap, $crate::keys::merge_network_kinds(&a_network_kinds, &b_network_kinds)))
+                Ok((TapTree::combine(a_tree, b_tree), a_keymap, $crate::keys::intersect_network_kinds(&a_network_kinds, &b_network_kinds)))
             })
 
     }};
@@ -770,7 +770,7 @@ macro_rules! fragment {
 
         let (key_maps, valid_network_kinds) = key_maps_network_kinds.into_iter().fold((KeyMap::default(), $crate::keys::any_network_kind()), |(mut keys_acc, net_acc), (key, net)| {
             keys_acc.extend(key.into_iter());
-            let net_acc = $crate::keys::merge_network_kinds(&net_acc, &net);
+            let net_acc = $crate::keys::intersect_network_kinds(&net_acc, &net);
 
             (keys_acc, net_acc)
         });
