@@ -640,6 +640,11 @@ where
     fn stage(&mut self, changeset: impl Into<ChangeSet<K>>) {
         self.stage.merge(changeset.into());
     }
+
+    /// Returns the latest checkpoint.
+    pub fn latest_checkpoint(&self) -> CheckPoint {
+        self.chain.tip()
+    }
 }
 
 // impl Wallet {
