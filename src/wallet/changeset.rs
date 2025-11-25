@@ -21,9 +21,6 @@ use chain::{
     Impl,
 };
 
-#[cfg(feature = "rusqlite")]
-use crate::CanBePersisted;
-
 /// A change set for [`Wallet`]
 ///
 /// ## Definition
@@ -172,7 +169,7 @@ where
 #[cfg(feature = "rusqlite")]
 impl<K> ChangeSet<K>
 where
-    K: Ord + Clone + CanBePersisted,
+    K: Ord + Clone + FromSql + ToSql,
 {
     /// Schema name for wallet.
     pub const WALLET_SCHEMA_NAME: &'static str = "bdk_wallet";
