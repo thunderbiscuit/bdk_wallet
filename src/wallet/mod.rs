@@ -15,19 +15,24 @@
 #![allow(unused)]
 use alloc::{
     boxed::Box,
+    collections::BTreeSet,
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
 };
 use core::{
     cmp::Ordering,
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     mem,
     ops::Deref,
 };
 
 use bdk_chain::{
-    indexer::keychain_txout::{self, KeychainTxOutIndex, DEFAULT_LOOKAHEAD},
+    indexed_tx_graph,
+    indexer::keychain_txout::{
+        self, FullScanRequestBuilderExt, KeychainTxOutIndex, SyncRequestBuilderExt,
+        DEFAULT_LOOKAHEAD,
+    },
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
         FullScanRequest, FullScanRequestBuilder, FullScanResponse, SyncRequest, SyncRequestBuilder,
@@ -54,7 +59,7 @@ use miniscript::{
 use rand_core::RngCore;
 
 mod changeset;
-pub mod coin_selection;
+// pub mod coin_selection;
 pub mod error;
 pub mod export;
 mod params;
@@ -79,8 +84,12 @@ use crate::keyring::KeyRing;
 use crate::psbt::PsbtUtils;
 use crate::types::*;
 use crate::wallet::{
-    coin_selection::{DefaultCoinSelectionAlgorithm, Excess, InsufficientFunds},
-    error::{BuildFeeBumpError, CreateTxError, MiniscriptPsbtError},
+    // coin_selection::{DefaultCoinSelectionAlgorithm, Excess, InsufficientFunds},
+    error::{
+        BuildFeeBumpError,
+        // CreateTxError,
+        MiniscriptPsbtError,
+    },
     signer::{SignOptions, SignerError, SignerOrdering, SignersContainer, TransactionSigner},
     // tx_builder::{FeePolicy, TxBuilder, TxParams},
     utils::{check_nsequence_rbf, After, Older, SecpCtx},
@@ -130,53 +139,6 @@ pub struct Wallet<K: Ord> {
     tx_graph: KeychainTxGraph<K>,
     stage: ChangeSet<K>,
 }
-
-/// An update to [`Wallet`].
-///
-/// It updates [`KeychainTxOutIndex`], [`bdk_chain::TxGraph`] and [`LocalChain`] atomically.
-#[derive(Debug, Clone)]
-pub struct Update<K> {
-    /// Contains the last active derivation indices per keychain (`K`), which is used to update the
-    /// [`KeychainTxOutIndex`].
-    pub last_active_indices: BTreeMap<K, u32>,
-
-    /// Update for the wallet's internal [`TxGraph`].
-    pub tx_update: TxUpdate<ConfirmationBlockTime>,
-
-    /// Update for the wallet's internal [`LocalChain`].
-    pub chain: Option<CheckPoint>,
-}
-
-impl<K> From<FullScanResponse<K>> for Update<K> {
-    fn from(value: FullScanResponse<K>) -> Self {
-        Self {
-            last_active_indices: value.last_active_indices,
-            tx_update: value.tx_update,
-            chain: value.chain_update,
-        }
-    }
-}
-
-impl<K> From<SyncResponse> for Update<K> {
-    fn from(value: SyncResponse) -> Self {
-        Self {
-            last_active_indices: BTreeMap::new(),
-            tx_update: value.tx_update,
-            chain: value.chain_update,
-        }
-    }
-}
-
-impl<K> Default for Update<K> {
-    fn default() -> Self {
-        Update {
-            last_active_indices: Default::default(),
-            tx_update: Default::default(),
-            chain: Default::default(),
-        }
-    }
-}
-
 /// A derived address and the index it was found at.
 /// For convenience this automatically derefs to `Address`
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,38 +273,6 @@ impl<K> From<crate::keyring::error::LoadError<K>> for LoadError<K> {
     }
 }
 
-/// An error that may occur when applying a block to [`Wallet`].
-#[derive(Debug)]
-pub enum ApplyBlockError {
-    /// Occurs when the update chain cannot connect with original chain.
-    CannotConnect(CannotConnectError),
-    /// Occurs when the `connected_to` hash does not match the hash derived from `block`.
-    UnexpectedConnectedToHash {
-        /// Block hash of `connected_to`.
-        connected_to_hash: BlockHash,
-        /// Expected block hash of `connected_to`, as derived from `block`.
-        expected_hash: BlockHash,
-    },
-}
-
-impl fmt::Display for ApplyBlockError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ApplyBlockError::CannotConnect(err) => write!(f,"{err}"),
-            ApplyBlockError::UnexpectedConnectedToHash {
-                expected_hash: block_hash,
-                connected_to_hash: checkpoint_hash,
-            } => write!(
-                f,
-                "`connected_to` hash {checkpoint_hash} differs from the expected hash {block_hash} (which is derived from `block`)"
-            ),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ApplyBlockError {}
-
 /// A `CanonicalTx` managed by a `Wallet`.
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
 
@@ -473,6 +403,31 @@ where
         })
     }
 
+    /// Get the next unused address for the given `keychain`, i.e. the address with the lowest
+    /// derivation index that hasn't been used in a transaction.
+    ///
+    /// This will attempt to reveal a new address if all previously revealed addresses have
+    /// been used, in which case the returned address will be the same as calling
+    /// [`Wallet::reveal_next_address`].
+    ///
+    /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or more
+    /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
+    pub fn next_unused_address(&mut self, keychain: K) -> Option<AddressInfo<K>> {
+        let index = &mut self.tx_graph.index;
+
+        let ((index, spk), index_changeset) = index.next_unused_spk(keychain.clone())?;
+
+        self.stage
+            .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
+
+        Some(AddressInfo {
+            index,
+            address: Address::from_script(spk.as_script(), self.keyring.network)
+                .expect("must have address form"),
+            keychain,
+        })
+    }
+
     /// Construct a [`Wallet`] from a [`ChangeSet`]
     pub fn from_changeset(
         changeset: ChangeSet<K>,
@@ -547,8 +502,38 @@ where
     pub fn local_chain(&self) -> &LocalChain {
         &self.chain
     }
-}
 
+    /// Iterate over relevant and canonical transactions in the wallet.
+    ///
+    /// A transactions is relevant if it spends from at least one a tracked output or spends to at
+    /// least one tracked script pubkey. A transaction is canonical when it is confirmed in the
+    /// best chain or does not conflict with a transaction confirmed in the best chain.
+    pub fn transactions<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>> + 'a {
+        let tx_graph = self.tx_graph.graph();
+        let index = &self.tx_graph.index;
+        tx_graph
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .filter(|c_tx| index.is_tx_relevant(&c_tx.tx_node.tx))
+    }
+    /// Return the list of unspent outputs of this wallet
+    pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput<K>> + '_ {
+        self.tx_graph
+            .graph()
+            .filter_chain_unspents(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+                self.tx_graph.index.outpoints().iter().cloned(),
+            )
+            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+    }
+}
 impl<K> Wallet<K>
 where
     K: Ord + Clone + Debug,
@@ -684,6 +669,51 @@ where
         }
     }
 }
+/// An update to [`Wallet`].
+///
+/// It updates [`KeychainTxOutIndex`], [`bdk_chain::TxGraph`] and [`LocalChain`] atomically.
+#[derive(Debug, Clone)]
+pub struct Update<K> {
+    /// Contains the last active derivation indices per keychain (`K`), which is used to update the
+    /// [`KeychainTxOutIndex`].
+    pub last_active_indices: BTreeMap<K, u32>,
+
+    /// Update for the wallet's internal [`TxGraph`].
+    pub tx_update: TxUpdate<ConfirmationBlockTime>,
+
+    /// Update for the wallet's internal [`LocalChain`].
+    pub chain: Option<CheckPoint>,
+}
+
+impl<K> From<FullScanResponse<K>> for Update<K> {
+    fn from(value: FullScanResponse<K>) -> Self {
+        Self {
+            last_active_indices: value.last_active_indices,
+            tx_update: value.tx_update,
+            chain: value.chain_update,
+        }
+    }
+}
+
+impl<K> From<SyncResponse> for Update<K> {
+    fn from(value: SyncResponse) -> Self {
+        Self {
+            last_active_indices: BTreeMap::new(),
+            tx_update: value.tx_update,
+            chain: value.chain_update,
+        }
+    }
+}
+
+impl<K> Default for Update<K> {
+    fn default() -> Self {
+        Update {
+            last_active_indices: Default::default(),
+            tx_update: Default::default(),
+            chain: Default::default(),
+        }
+    }
+}
 
 impl<K> Wallet<K>
 where
@@ -727,411 +757,227 @@ where
     }
 }
 
+/// Methods to construct sync/full-scan requests for spk-based chain sources.
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + fmt::Debug,
+{
+    /// Create a partial [`SyncRequest`] for all revealed spks.
+    ///
+    /// This is the first step while doing a spk-based wallet partial sync, the returned
+    /// [`SyncRequest`] collects all revealed script pubkeys from the wallet keychain needed to
+    /// start a blockchain sync with a spk based blockchain client.
+    ///
+    /// The time of the sync is the current system time and is used to record the last seen (or
+    /// evicted) timestamps of mempool transactions. Note that the timestamps may only increase
+    /// to be counted by the tx graph. To supply your own start time see
+    /// [`start_sync_with_revealed_spks_at`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
+    pub fn start_sync_with_revealed_spks(&self) -> SyncRequestBuilder<(K, u32)> {
+        SyncRequest::builder()
+            .chain_tip(self.chain.tip())
+            .revealed_spks_from_indexer(&self.tx_graph.index, ..)
+            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
+    }
+
+    /// Create a partial [`SyncRequest`] for all revealed spks at `start_time`.
+    pub fn start_sync_with_revealed_spks_at(
+        &self,
+        start_time: u64,
+    ) -> SyncRequestBuilder<(K, u32)> {
+        SyncRequest::builder_at(start_time)
+            .chain_tip(self.chain.tip())
+            .revealed_spks_from_indexer(&self.tx_graph.index, ..)
+            .expected_spk_txids(self.tx_graph.list_expected_spk_txids(
+                &self.chain,
+                self.chain.tip().block_id(),
+                ..,
+            ))
+    }
+
+    /// Create a [`FullScanRequest`] at `start_time`.
+    ///
+    /// This is the first step in spk-based wallet full scan, the returned [`FullScanRequest`]
+    /// collects iterators for the wallet's keychain spks needed for a full scan.
+    ///
+    /// Full scan is generally used when importing or restoring an already used wallet when used
+    /// spks are not known.
+    ///
+    /// The time of the scan is the current system time and is used to record the last seen (or
+    /// evicted) timestamps of the mempool transactions. Note that the timestamps may only
+    /// increase to be counted by the tx graph. To use a custom time see [`start_full_scan_at`].
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "std")]
+    pub fn start_full_scan(&self) -> FullScanRequestBuilder<K> {
+        FullScanRequest::builder()
+            .chain_tip(self.chain.tip())
+            .spks_from_indexer(&self.tx_graph.index)
+    }
+
+    /// Create a [`FullScanRequest`] builder at the `start_time`.
+    pub fn start_full_scan_at(&self, start_time: u64) -> FullScanRequestBuilder<K> {
+        FullScanRequest::builder_at(start_time)
+            .chain_tip(self.chain.tip())
+            .spks_from_indexer(&self.tx_graph.index)
+    }
+}
+
+/// An error on applying a block to [`Wallet`].
+///
+/// Thrown when underlying call to `apply_block`{`_connected_to`} errs.
+#[derive(Debug)]
+pub struct ApplyBlockError(ApplyHeaderError);
+
+impl Display for ApplyBlockError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for ApplyBlockError {}
+
+/// Methods for performing block by block syncing
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + Debug,
+{
+    /// Add transactions from `block` at `height` to [`Wallet`] and connects the `block` to the
+    /// internal chain.
+    ///
+    /// The `connected_to` parameter specifies how this `block` connects to the internal
+    /// [`LocalChain`]. Relevant transactions are filtered from the `block` and inserted into
+    /// the internal [`TxGraph`].
+    ///
+    /// **WARNING**: The wallet must be persisted after a call to this method if you need the
+    /// inserted block data to be available after a reload.
+    ///
+    ///  Errors out when the underlying call to `apply_header_connected_to` fails.
+    pub fn apply_block_connected_to(
+        &mut self,
+        block: &Block,
+        height: u32,
+        connected_to: BlockId,
+    ) -> Result<(), ApplyBlockError> {
+        let mut changeset = ChangeSet::default();
+        changeset.merge(
+            self.chain
+                .apply_header_connected_to(&block.header, height, connected_to)
+                .map_err(ApplyBlockError)?
+                .into(),
+        );
+        changeset.merge(self.tx_graph.apply_block_relevant(block, height).into());
+        self.stage.merge(changeset);
+        Ok(())
+    }
+
+    /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
+    /// `prev_blockhash` of the block's header.
+    ///
+    /// This is a convenience method that is equivalent to calling [`apply_block_connected_to`]
+    /// with `prev_blockhash` and `height-1` as the `connected_to` parameter.
+    ///
+    /// [`apply_block_connected_to`]: Self::apply_block_connected_to
+    pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<(), ApplyBlockError> {
+        let connected_to = match height.checked_sub(1) {
+            Some(prev_ht) => BlockId {
+                height: prev_ht,
+                hash: block.header.prev_blockhash,
+            },
+            None => BlockId {
+                height,
+                hash: block.block_hash(),
+            },
+        };
+        self.apply_block_connected_to(block, height, connected_to)
+    }
+
+    /// Adds relevant unconfirmed transactions to the [`Wallet`]
+    ///
+    /// Irrelevant transactions are filtered out.
+    ///
+    /// This method takes in an iterator of `(transaction, last_seen)` where `last_seen` is the
+    /// timestamp when the transaction was last seen in the mempool. In case of a conflicting
+    /// unconfirmed transaction, the transaction with the later `last_seen` is prioritized.
+    ///
+    /// **WARNING**: You must persist the changes resulting from one or more calls to this method
+    /// if you need the applied unconfirmed transactions to be reloaded after closing the wallet.
+    /// See [`Wallet::reveal_next_address`].
+    pub fn apply_unconfirmed_txs<T: Into<Arc<Transaction>>>(
+        &mut self,
+        unconfirmed_txs: impl IntoIterator<Item = (T, u64)>,
+    ) {
+        let changeset = self
+            .tx_graph
+            .batch_insert_relevant_unconfirmed(unconfirmed_txs);
+        self.stage.merge(changeset.into())
+    }
+
+    /// Apply evictions of the given transaction IDs with their associated timestamps.
+    ///
+    /// This function is used to mark specific unconfirmed transactions as evicted from the mempool.
+    /// Eviction means that these transactions are not considered canonical by default, and will
+    /// no longer be part of the wallet's [`transactions`] set. This can happen for example when
+    /// a transaction is dropped from the mempool due to low fees or conflicts with another
+    /// transaction.
+    ///
+    /// Only transactions that are currently unconfirmed and canonical are considered for eviction.
+    /// Transactions that are not relevant to the wallet are ignored. Note that an evicted
+    /// transaction can become canonical again if it is later observed on-chain or seen in the
+    /// mempool with a higher priority (e.g., due to a fee bump).
+    ///
+    /// ## Parameters
+    ///
+    /// `evicted_txs`: An iterator of `(Txid, u64)` tuples, where:
+    /// - `Txid`: The transaction ID of the transaction to be evicted.
+    /// - `u64`: The timestamp indicating when the transaction was evicted from the mempool. This
+    ///   will usually correspond to the time of the latest chain sync. See docs for
+    ///   [`start_sync_with_revealed_spks`].
+    ///
+    /// ## Notes
+    ///
+    /// - Not all blockchain backends support automatic mempool eviction handling - this method may
+    ///   be used in such cases. It can also be used to negate the effect of
+    ///   [`apply_unconfirmed_txs`] for a particular transaction without the need for an additional
+    ///   sync.
+    /// - The changes are staged in the wallet's internal state and must be persisted to ensure they
+    ///   are retained across wallet restarts. Use [`Wallet::take_staged`] to retrieve the staged
+    ///   changes and persist them to your database of choice.
+    /// - Evicted transactions are removed from the wallet's canonical transaction set, but the data
+    ///   remains in the wallet's internal transaction graph for historical purposes.
+    /// - Ensure that the timestamps provided are accurate and monotonically increasing, as they
+    ///   influence the wallet's canonicalization logic.
+    ///
+    /// [`transactions`]: Wallet::transactions
+    /// [`apply_unconfirmed_txs`]: Wallet::apply_unconfirmed_txs
+    /// [`start_sync_with_revealed_spks`]: Wallet::start_sync_with_revealed_spks
+    pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
+        let chain = &self.chain;
+        let canon_txids: BTreeSet<Txid> = self
+            .tx_graph
+            .graph()
+            .list_canonical_txs(
+                chain,
+                chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .map(|c_tx| c_tx.tx_node.txid)
+            .collect();
+        let changeset = self.tx_graph.batch_insert_relevant_evicted_at(
+            evicted_txs
+                .into_iter()
+                .filter(|(txid, _)| canon_txids.contains(txid)),
+        );
+        self.stage.merge(changeset.into())
+    }
+}
+
 // impl Wallet {
-//     /// Build a new single descriptor [`Wallet`].
-//     ///
-//     /// If you have previously created a wallet, use [`load`](Self::load) instead.
-//     ///
-//     /// # Note
-//     ///
-//     /// Only use this method when creating a wallet designed to be used with a single
-//     /// descriptor and keychain. Otherwise the recommended way to construct a new wallet is
-//     /// by using [`Wallet::create`]. It's worth noting that not all features are available
-//     /// with single descriptor wallets, for example setting a [`change_policy`] on [`TxBuilder`]
-//     /// and related methods such as [`do_not_spend_change`]. This is because all payments are
-//     /// received on the external keychain (including change), and without a change keychain
-//     /// BDK lacks enough information to distinguish between change and outside payments.
-//     ///
-//     /// Additionally because this wallet has no internal (change) keychain, all methods that
-//     /// require a [`KeychainKind`] as input, e.g. [`reveal_next_address`] should only be called
-//     /// using the [`External`] variant. In most cases passing [`Internal`] is treated as the
-//     /// equivalent of [`External`] but this behavior must not be relied on.
-//     ///
-//     /// # Example
-//     ///
-//     /// ```rust
-//     /// # use bdk_wallet::Wallet;
-//     /// # use bitcoin::Network;
-//     /// # const EXTERNAL_DESC: &str =
-// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
-// 84'/1'/0'/0/*)";     /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
-//     /// # let file_path = temp_dir.path().join("store.db");
-//     /// // Create a wallet that is persisted to SQLite database.
-//     /// use bdk_wallet::rusqlite::Connection;
-//     /// let mut conn = Connection::open(file_path)?;
-//     /// let wallet = Wallet::create_single(EXTERNAL_DESC)
-//     ///     .network(Network::Testnet)
-//     ///     .create_wallet(&mut conn)?;
-//     /// # Ok::<_, anyhow::Error>(())
-//     /// ```
-//     /// [`change_policy`]: TxBuilder::change_policy
-//     /// [`do_not_spend_change`]: TxBuilder::do_not_spend_change
-//     /// [`External`]: KeychainKind::External
-//     /// [`Internal`]: KeychainKind::Internal
-//     /// [`reveal_next_address`]: Self::reveal_next_address
-//     pub fn create_single<D>(descriptor: D) -> CreateParams
-//     where
-//         D: IntoWalletDescriptor + Send + Clone + 'static,
-//     {
-//         CreateParams::new_single(descriptor)
-//     }
-
-//     /// Build a new [`Wallet`].
-//     ///
-//     /// If you have previously created a wallet, use [`load`](Self::load) instead.
-//     ///
-//     /// # Synopsis
-//     ///
-//     /// ```rust
-//     /// # use bdk_wallet::Wallet;
-//     /// # use bitcoin::Network;
-//     /// # fn main() -> anyhow::Result<()> {
-//     /// # const EXTERNAL_DESC: &str =
-// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
-// 84'/1'/0'/0/*)";     /// # const INTERNAL_DESC: &str =
-// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
-// 84'/1'/0'/1/*)";     /// // Create a non-persisted wallet.
-//     /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-//     ///     .network(Network::Testnet)
-//     ///     .create_wallet_no_persist()?;
-//     ///
-//     /// // Create a wallet that is persisted to SQLite database.
-//     /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
-//     /// # let file_path = temp_dir.path().join("store.db");
-//     /// use bdk_wallet::rusqlite::Connection;
-//     /// let mut conn = Connection::open(file_path)?;
-//     /// let wallet = Wallet::create(EXTERNAL_DESC, INTERNAL_DESC)
-//     ///     .network(Network::Testnet)
-//     ///     .create_wallet(&mut conn)?;
-//     /// # Ok(())
-//     /// # }
-//     /// ```
-//     pub fn create<D>(descriptor: D, change_descriptor: D) -> CreateParams
-//     where
-//         D: IntoWalletDescriptor + Send + Clone + 'static,
-//     {
-//         CreateParams::new(descriptor, change_descriptor)
-//     }
-
-//     /// Build a new [`Wallet`] from a two-path descriptor.
-//     ///
-//     /// This function parses a multipath descriptor with exactly 2 paths and creates a wallet
-//     /// using the existing receive and change wallet creation logic. Note that you can only use
-// this     /// method with public extended keys (`xpub` prefix) to create watch-only wallets.
-//     ///
-//     /// Multipath descriptors follow [BIP 389] and allow defining both receive and change
-//     /// derivation paths in a single descriptor using the `<0;1>` syntax.
-//     ///
-//     /// If you have previously created a wallet, use [`load`](Self::load) instead.
-//     ///
-//     /// # Errors
-//     /// Returns an error if the descriptor is invalid, not a 2-path multipath descriptor, or if
-//     /// the descriptor provided contains an extended private key (`xprv` prefix).
-//     ///
-//     /// # Synopsis
-//     ///
-//     /// ```rust
-//     /// # use bdk_wallet::Wallet;
-//     /// # use bitcoin::Network;
-//     /// # use bdk_wallet::KeychainKind;
-//     /// # const TWO_PATH_DESC: &str =
-// "wpkh([9a6a2580/84'/1'/0'
-// ]tpubDDnGNapGEY6AZAdQbfRJgMg9fvz8pUBrLwvyvUqEgcUfgzM6zc2eVK4vY9x9L5FJWdX8WumXuLEDV5zDZnTfbn87vLe9XceCFwTu9so9Kks/
-// <0;1>/*)";     /// let wallet = Wallet::create_from_two_path_descriptor(TWO_PATH_DESC)
-//     ///     .network(Network::Testnet)
-//     ///     .create_wallet_no_persist()
-//     ///     .unwrap();
-//     ///
-//     /// // The multipath descriptor automatically creates separate receive and change descriptors
-//     /// let receive_addr = wallet.peek_address(KeychainKind::External, 0);  // Uses path /0/*
-//     /// let change_addr = wallet.peek_address(KeychainKind::Internal, 0);   // Uses path /1/*
-//     /// assert_ne!(receive_addr.address, change_addr.address);
-//     /// ```
-//     ///
-//     /// [BIP 389]: https://github.com/bitcoin/bips/blob/master/bip-0389.mediawiki
-//     pub fn create_from_two_path_descriptor<D>(two_path_descriptor: D) -> CreateParams
-//     where
-//         D: IntoWalletDescriptor + Send + Clone + 'static,
-//     {
-//         CreateParams::new_two_path(two_path_descriptor)
-//     }
-
-// /// Create a new [`Wallet`] with given `params`.
-// ///
-// /// Refer to [`Wallet::create`] for more.
-// pub fn create_with_params(params: CreateParams) -> Result<Self, DescriptorError> {
-//     let secp = SecpCtx::new();
-//     let network = params.network;
-//     let network_kind = NetworkKind::from(network);
-//     let genesis_hash = params
-//         .genesis_hash
-//         .unwrap_or(genesis_block(network).block_hash());
-//     let (chain, chain_changeset) = LocalChain::from_genesis_hash(genesis_hash);
-
-// let (descriptor, mut descriptor_keymap) = (params.descriptor)(&secp, network_kind)?;
-// check_wallet_descriptor(&descriptor)?;
-// descriptor_keymap.extend(params.descriptor_keymap);
-
-//         let signers = Arc::new(SignersContainer::build(
-//             descriptor_keymap,
-//             &descriptor,
-//             &secp,
-//         ));
-
-// let (change_descriptor, change_signers) = match params.change_descriptor {
-//     Some(make_desc) => {
-//         let (change_descriptor, mut internal_keymap) = make_desc(&secp, network_kind)?;
-//         check_wallet_descriptor(&change_descriptor)?;
-//         internal_keymap.extend(params.change_descriptor_keymap);
-//         let change_signers = Arc::new(SignersContainer::build(
-//             internal_keymap,
-//             &change_descriptor,
-//             &secp,
-//         ));
-//         (Some(change_descriptor), change_signers)
-//     }
-//     None => (None, Arc::new(SignersContainer::new())),
-// };
-
-//         let mut stage = ChangeSet {
-//             descriptor: Some(descriptor.clone()),
-//             change_descriptor: change_descriptor.clone(),
-//             local_chain: chain_changeset,
-//             network: Some(network),
-//             ..Default::default()
-//         };
-
-//         let indexed_graph = make_indexed_graph(
-//             &mut stage,
-//             Default::default(),
-//             Default::default(),
-//             descriptor,
-//             change_descriptor,
-//             params.lookahead,
-//             params.use_spk_cache,
-//         )?;
-
-//         Ok(Wallet {
-//             signers,
-//             change_signers,
-//             network,
-//             chain,
-//             indexed_graph,
-//             stage,
-//             secp,
-//         })
-//     }
-
-//     /// Build [`Wallet`] by loading from persistence or [`ChangeSet`].
-//     ///
-//     /// Note that the descriptor secret keys are not persisted to the db. You can add
-//     /// signers after-the-fact with [`Wallet::add_signer`] or [`Wallet::set_keymap`]. You
-//     /// can also add keys when building the wallet by using [`LoadParams::keymap`]. Finally
-//     /// you can check the wallet's descriptors are what you expect with
-// [`LoadParams::descriptor`]     /// which will try to populate signers if
-// [`LoadParams::extract_keys`] is enabled.     ///
-//     /// # Synopsis
-//     ///
-//     /// ```rust,no_run
-//     /// # use bdk_wallet::{Wallet, ChangeSet, KeychainKind};
-//     /// # use bitcoin::{BlockHash, Network, hashes::Hash};
-//     /// # fn main() -> anyhow::Result<()> {
-//     /// # const EXTERNAL_DESC: &str =
-// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
-// 84'/1'/0'/0/*)";     /// # const INTERNAL_DESC: &str =
-// "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/
-// 84'/1'/0'/1/*)";     /// # let changeset = ChangeSet::default();
-//     /// // Load a wallet from changeset (no persistence).
-//     /// let wallet = Wallet::load()
-//     ///     .load_wallet_no_persist(changeset)?
-//     ///     .expect("must have data to load wallet");
-//     ///
-//     /// // Load a wallet that is persisted to SQLite database.
-//     /// # let temp_dir = tempfile::tempdir().expect("must create tempdir");
-//     /// # let file_path = temp_dir.path().join("store.db");
-//     /// # let external_keymap = Default::default();
-//     /// # let internal_keymap = Default::default();
-//     /// # let genesis_hash = BlockHash::all_zeros();
-//     /// let mut conn = bdk_wallet::rusqlite::Connection::open(file_path)?;
-//     /// let mut wallet = Wallet::load()
-//     ///     // check loaded descriptors matches these values and extract private keys
-//     ///     .descriptor(KeychainKind::External, Some(EXTERNAL_DESC))
-//     ///     .descriptor(KeychainKind::Internal, Some(INTERNAL_DESC))
-//     ///     .extract_keys()
-//     ///     // you can also manually add private keys
-//     ///     .keymap(KeychainKind::External, external_keymap)
-//     ///     .keymap(KeychainKind::Internal, internal_keymap)
-//     ///     // ensure loaded wallet's genesis hash matches this value
-//     ///     .check_genesis_hash(genesis_hash)
-//     ///     // set a lookahead for our indexer
-//     ///     .lookahead(101)
-//     ///     .load_wallet(&mut conn)?
-//     ///     .expect("must have data to load wallet");
-//     /// # Ok(())
-//     /// # }
-//     /// ```
-//     pub fn load() -> LoadParams {
-//         LoadParams::new()
-//     }
-
-// /// Load [`Wallet`] from the given previously persisted [`ChangeSet`] and `params`.
-// ///
-// /// Returns `Ok(None)` if the changeset is empty. Refer to [`Wallet::load`] for more.
-// pub fn load_with_params(
-//     changeset: ChangeSet,
-//     params: LoadParams,
-// ) -> Result<Option<Self>, LoadError> {
-//     if changeset.is_empty() {
-//         return Ok(None);
-//     }
-//     let secp = Secp256k1::new();
-//     let network = changeset.network.ok_or(LoadError::MissingNetwork)?;
-//     let network_kind = NetworkKind::from(network);
-//     let chain = LocalChain::from_changeset(changeset.local_chain)
-//         .map_err(|_| LoadError::MissingGenesis)?;
-
-//         if let Some(exp_network) = params.check_network {
-//             if network != exp_network {
-//                 return Err(LoadError::Mismatch(LoadMismatch::Network {
-//                     loaded: network,
-//                     expected: exp_network,
-//                 }));
-//             }
-//         }
-//         if let Some(exp_genesis_hash) = params.check_genesis_hash {
-//             if chain.genesis_hash() != exp_genesis_hash {
-//                 return Err(LoadError::Mismatch(LoadMismatch::Genesis {
-//                     loaded: chain.genesis_hash(),
-//                     expected: exp_genesis_hash,
-//                 }));
-//             }
-//         }
-
-//         let descriptor = changeset
-//             .descriptor
-//             .ok_or(LoadError::MissingDescriptor(KeychainKind::External))?;
-//         check_wallet_descriptor(&descriptor).map_err(LoadError::Descriptor)?;
-//         let mut external_keymap = params.descriptor_keymap;
-
-// if let Some(expected) = params.check_descriptor {
-//     if let Some(make_desc) = expected {
-//         let (exp_desc, keymap) =
-//             make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
-//         if descriptor.descriptor_id() != exp_desc.descriptor_id() {
-//             return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-//                 keychain: KeychainKind::External,
-//                 loaded: Some(descriptor),
-//                 expected: Some(exp_desc),
-//             }));
-//         }
-//         if params.extract_keys {
-//             external_keymap.extend(keymap);
-//         }
-//     } else {
-//         return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-//             keychain: KeychainKind::External,
-//             loaded: Some(descriptor),
-//             expected: None,
-//         }));
-//     }
-// }
-// let signers = Arc::new(SignersContainer::build(external_keymap, &descriptor, &secp));
-
-//         let mut change_descriptor = None;
-//         let mut internal_keymap = params.change_descriptor_keymap;
-
-// match (changeset.change_descriptor, params.check_change_descriptor) {
-//     // Empty signer.
-//     (None, None) => {}
-//     (None, Some(expect)) => {
-//         // Expected descriptor, but none is loaded.
-//         if let Some(make_desc) = expect {
-//             let (exp_desc, _) =
-//                 make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
-//             return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-//                 keychain: KeychainKind::Internal,
-//                 loaded: None,
-//                 expected: Some(exp_desc),
-//             }));
-//         }
-//     }
-//     // Nothing expected.
-//     (Some(desc), None) => {
-//         check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
-//         change_descriptor = Some(desc);
-//     }
-//     (Some(desc), Some(expect)) => match expect {
-//         // Expected none for existing.
-//         None => {
-//             return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-//                 keychain: KeychainKind::Internal,
-//                 loaded: Some(desc),
-//                 expected: None,
-//             }))
-//         }
-//         // Parameters must match.
-//         Some(make_desc) => {
-//             check_wallet_descriptor(&desc).map_err(LoadError::Descriptor)?;
-//             let (exp_desc, keymap) =
-//                 make_desc(&secp, network_kind).map_err(LoadError::Descriptor)?;
-//             if desc.descriptor_id() != exp_desc.descriptor_id() {
-//                 return Err(LoadError::Mismatch(LoadMismatch::Descriptor {
-//                     keychain: KeychainKind::Internal,
-//                     loaded: Some(desc),
-//                     expected: Some(exp_desc),
-//                 }));
-//             }
-//             if params.extract_keys {
-//                 internal_keymap.extend(keymap);
-//             }
-//             change_descriptor = Some(desc);
-//         }
-//     },
-// }
-
-//         let change_signers = match change_descriptor {
-//             Some(ref change_descriptor) => Arc::new(SignersContainer::build(
-//                 internal_keymap,
-//                 change_descriptor,
-//                 &secp,
-//             )),
-//             None => Arc::new(SignersContainer::new()),
-//         };
-
-//         let mut stage = ChangeSet::default();
-
-//         let indexed_graph = make_indexed_graph(
-//             &mut stage,
-//             changeset.tx_graph,
-//             changeset.indexer,
-//             descriptor,
-//             change_descriptor,
-//             params.lookahead,
-//             params.use_spk_cache,
-//         )
-//         .map_err(LoadError::Descriptor)?;
-
-//         Ok(Some(Wallet {
-//             signers,
-//             change_signers,
-//             chain,
-//             indexed_graph,
-//             stage,
-//             network,
-//             secp,
-//         }))
-//     }
-
-// /// Get the [`Network`] the wallet is using.
-// pub fn network(&self) -> Network {
-//     self.network
-// }
-
-//     /// Iterator over all keychains in this wallet
-//     pub fn keychains(&self) -> impl Iterator<Item = (KeychainKind, &ExtendedDescriptor)> {
-//         self.indexed_graph.index.keychains()
-//     }
-
 //     /// Peek an address of the given `keychain` at `index` without revealing it.
 //     ///
 //     /// For non-wildcard descriptors this returns the same address at every provided index.
@@ -1157,50 +1003,6 @@ where
 //         AddressInfo {
 //             index,
 //             address: Address::from_script(&spk, self.network).expect("must have address form"),
-//             keychain,
-//         }
-//     }
-
-//     /// Attempt to reveal the next address of the given `keychain`.
-//     ///
-//     /// This will increment the keychain's derivation index. If the keychain's descriptor doesn't
-//     /// contain a wildcard or every address is already revealed up to the maximum derivation
-//     /// index defined in [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki),
-//     /// then the last revealed address will be returned.
-//     ///
-//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
-// more     /// calls to this method before closing the wallet. For example:
-//     ///
-//     /// ```rust,no_run
-//     /// # use bdk_wallet::{LoadParams, ChangeSet, KeychainKind};
-//     /// use bdk_chain::rusqlite::Connection;
-//     /// let mut conn = Connection::open_in_memory().expect("must open connection");
-//     /// let mut wallet = LoadParams::new()
-//     ///     .load_wallet(&mut conn)
-//     ///     .expect("database is okay")
-//     ///     .expect("database has data");
-//     /// let next_address = wallet.reveal_next_address(KeychainKind::External);
-//     /// wallet.persist(&mut conn).expect("write is okay");
-//     ///
-//     /// // Now it's safe to show the user their next address!
-//     /// println!("Next address: {}", next_address.address);
-//     /// # Ok::<(), anyhow::Error>(())
-//     /// ```
-//     pub fn reveal_next_address(&mut self, keychain: KeychainKind) -> AddressInfo {
-//         let keychain = self.map_keychain(keychain);
-//         let index = &mut self.indexed_graph.index;
-//         let stage = &mut self.stage;
-
-//         let ((index, spk), index_changeset) = index
-//             .reveal_next_spk(keychain)
-//             .expect("keychain must exist");
-
-//         stage.merge(index_changeset.into());
-
-//         AddressInfo {
-//             index,
-//             address: Address::from_script(spk.as_script(), self.network)
-//                 .expect("must have address form"),
 //             keychain,
 //         }
 //     }
@@ -1233,34 +1035,6 @@ where
 //             address: Address::from_script(&spk, self.network).expect("must have address form"),
 //             keychain,
 //         })
-//     }
-
-//     /// Get the next unused address for the given `keychain`, i.e. the address with the lowest
-//     /// derivation index that hasn't been used in a transaction.
-//     ///
-//     /// This will attempt to reveal a new address if all previously revealed addresses have
-//     /// been used, in which case the returned address will be the same as calling
-//     /// [`Wallet::reveal_next_address`].
-//     ///
-//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
-// more     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-//     pub fn next_unused_address(&mut self, keychain: KeychainKind) -> AddressInfo {
-//         let keychain = self.map_keychain(keychain);
-//         let index = &mut self.indexed_graph.index;
-
-//         let ((index, spk), index_changeset) = index
-//             .next_unused_spk(keychain)
-//             .expect("keychain must exist");
-
-//         self.stage
-//             .merge(indexed_tx_graph::ChangeSet::from(index_changeset).into());
-
-//         AddressInfo {
-//             index,
-//             address: Address::from_script(spk.as_script(), self.network)
-//                 .expect("must have address form"),
-//             keychain,
-//         }
 //     }
 
 //     /// Marks an address used of the given `keychain` at `index`.
@@ -1313,20 +1087,6 @@ where
 //     pub fn derivation_of_spk(&self, spk: ScriptBuf) -> Option<(KeychainKind, u32)> {
 //         self.indexed_graph.index.index_of_spk(spk).cloned()
 //     }
-
-//     /// Return the list of unspent outputs of this wallet
-//     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-//         self.indexed_graph
-//             .graph()
-//             .filter_chain_unspents(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//                 self.indexed_graph.index.outpoints().iter().cloned(),
-//             )
-//             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
-//     }
-
 //     /// Get the [`TxDetails`] of a wallet transaction.
 //     ///
 //     /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions,
@@ -1372,11 +1132,6 @@ where
 //     /// Get all the checkpoints the wallet is currently storing indexed by height.
 //     pub fn checkpoints(&self) -> CheckPointIter {
 //         self.chain.iter_checkpoints()
-//     }
-
-//     /// Returns the latest checkpoint.
-//     pub fn latest_checkpoint(&self) -> CheckPoint {
-//         self.chain.tip()
 //     }
 
 //     /// Get unbounded script pubkey iterators for both `Internal` and `External` keychains.
@@ -1600,29 +1355,6 @@ where
 //                 CanonicalizationParams::default(),
 //             )
 //             .find(|tx| tx.tx_node.txid == txid)
-//     }
-
-//     /// Iterate over relevant and canonical transactions in the wallet.
-//     ///
-//     /// A transaction is relevant when it spends from or spends to at least one tracked output. A
-//     /// transaction is canonical when it is confirmed in the best chain, or does not conflict
-//     /// with any transaction confirmed in the best chain.
-//     ///
-//     /// To iterate over all transactions, including those that are irrelevant and not canonical,
-// use     /// [`TxGraph::full_txs`].
-//     ///
-//     /// To iterate over all canonical transactions, including those that are irrelevant, use
-//     /// [`TxGraph::list_canonical_txs`].
-//     pub fn transactions<'a>(&'a self) -> impl Iterator<Item = WalletTx<'a>> + 'a {
-//         let tx_graph = self.indexed_graph.graph();
-//         let tx_index = &self.indexed_graph.index;
-//         tx_graph
-//             .list_canonical_txs(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//             )
-//             .filter(|c_tx| tx_index.is_tx_relevant(&c_tx.tx_node.tx))
 //     }
 
 //     /// Array of relevant and canonical transactions in the wallet sorted with a comparator
@@ -2092,64 +1824,65 @@ where
 //         Ok(psbt)
 //     }
 
-    // /// Bump the fee of a transaction previously created with this wallet.
-    // ///
-    // /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
-    // /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
-    // /// pre-populated with the inputs and outputs of the original transaction.
-    // ///
-    // /// ## Example
-    // ///
-    // /// ```no_run
-    // /// # // TODO: remove norun -- bumping fee seems to need the tx in the wallet database first.
-    // /// # use std::str::FromStr;
-    // /// # use bitcoin::*;
-    // /// # use bdk_wallet::*;
-    // /// # use bdk_wallet::ChangeSet;
-    // /// # use bdk_wallet::error::CreateTxError;
-    // /// # use anyhow::Error;
-    // /// # let descriptor = "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/*)";
-    // /// # let mut wallet = doctest_wallet!();
-    // /// # let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked();
-    // /// let mut psbt = {
-    // ///     let mut builder = wallet.build_tx();
-    // ///     builder
-    // ///         .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
-    // ///     builder.finish()?
-    // /// };
-    // /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
-    // /// let tx = psbt.clone().extract_tx().expect("tx");
-    // /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
-    // /// let mut psbt =  {
-    // ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
-    // ///     builder
-    // ///         .fee_rate(FeeRate::from_sat_per_vb(5).expect("valid feerate"));
-    // ///     builder.finish()?
-    // /// };
-    // ///
-    // /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
-    // /// let fee_bumped_tx = psbt.extract_tx();
-    // /// // broadcast fee_bumped_tx to replace original
-    // /// # Ok::<(), anyhow::Error>(())
-    // /// ```
-    // // TODO: support for merging multiple transactions while bumping the fees
-    // pub fn build_fee_bump(
-    //     &mut self,
-    //     txid: Txid,
-    // ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
-    //     let tx_graph = self.indexed_graph.graph();
-    //     let txout_index = &self.indexed_graph.index;
-    //     let chain_tip = self.chain.tip().block_id();
-    //     let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
-    //         .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
-    //         .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
-    //         .collect();
+// /// Bump the fee of a transaction previously created with this wallet.
+// ///
+// /// Returns an error if the transaction is already confirmed or doesn't explicitly signal
+// /// *replace by fee* (RBF). If the transaction can be fee bumped then it returns a [`TxBuilder`]
+// /// pre-populated with the inputs and outputs of the original transaction.
+// ///
+// /// ## Example
+// ///
+// /// ```no_run
+// /// # // TODO: remove norun -- bumping fee seems to need the tx in the wallet database first.
+// /// # use std::str::FromStr;
+// /// # use bitcoin::*;
+// /// # use bdk_wallet::*;
+// /// # use bdk_wallet::ChangeSet;
+// /// # use bdk_wallet::error::CreateTxError;
+// /// # use anyhow::Error;
+// /// # let descriptor =
+// "wpkh(tpubD6NzVbkrYhZ4Xferm7Pz4VnjdcDPFyjVu5K4iZXQ4pVN8Cks4pHVowTBXBKRhX64pkRyJZJN5xAKj4UDNnLPb5p2sSKXhewoYx5GbTdUFWq/
+// *)"; /// # let mut wallet = doctest_wallet!();
+// /// # let to_address =
+// Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt").unwrap().assume_checked(); /// let mut
+// psbt = { ///     let mut builder = wallet.build_tx();
+// ///     builder
+// ///         .add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
+// ///     builder.finish()?
+// /// };
+// /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+// /// let tx = psbt.clone().extract_tx().expect("tx");
+// /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
+// /// let mut psbt =  {
+// ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
+// ///     builder
+// ///         .fee_rate(FeeRate::from_sat_per_vb(5).expect("valid feerate"));
+// ///     builder.finish()?
+// /// };
+// ///
+// /// let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+// /// let fee_bumped_tx = psbt.extract_tx();
+// /// // broadcast fee_bumped_tx to replace original
+// /// # Ok::<(), anyhow::Error>(())
+// /// ```
+// // TODO: support for merging multiple transactions while bumping the fees
+// pub fn build_fee_bump(
+//     &mut self,
+//     txid: Txid,
+// ) -> Result<TxBuilder<'_, DefaultCoinSelectionAlgorithm>, BuildFeeBumpError> {
+//     let tx_graph = self.indexed_graph.graph();
+//     let txout_index = &self.indexed_graph.index;
+//     let chain_tip = self.chain.tip().block_id();
+//     let chain_positions: HashMap<Txid, ChainPosition<_>> = tx_graph
+//         .list_canonical_txs(&self.chain, chain_tip, CanonicalizationParams::default())
+//         .map(|canon_tx| (canon_tx.tx_node.txid, canon_tx.chain_position))
+//         .collect();
 
-        // let mut tx = tx_graph
-        //     .get_tx(txid)
-        //     .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
-        //     .as_ref()
-        //     .clone();
+// let mut tx = tx_graph
+//     .get_tx(txid)
+//     .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
+//     .as_ref()
+//     .clone();
 
 //         if chain_positions
 //             .get(&txid)
@@ -2169,65 +1902,65 @@ where
 //             ));
 //         }
 
-        // let fee = self
-        //     .calculate_fee(&tx)
-        //     .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
-        // let fee_rate = fee / tx.weight();
+// let fee = self
+//     .calculate_fee(&tx)
+//     .map_err(|_| BuildFeeBumpError::FeeRateUnavailable)?;
+// let fee_rate = fee / tx.weight();
 
-        // // Remove the inputs from the tx and process them.
-        // let utxos: Vec<WeightedUtxo> = tx
-        //     .input
-        //     .drain(..)
-        //     .map(|txin| -> Result<_, BuildFeeBumpError> {
-        //         let outpoint = txin.previous_output;
-        //         let prev_txout = tx_graph
-        //             .get_txout(outpoint)
-        //             .cloned()
-        //             .ok_or(BuildFeeBumpError::UnknownUtxo(outpoint))?;
-        //         match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
-        //             Some(&(keychain, derivation_index)) => {
-        //                 let txout = prev_txout;
-        //                 let chain_position = chain_positions
-        //                     .get(&outpoint.txid)
-        //                     .cloned()
-        //                     .ok_or(BuildFeeBumpError::TransactionNotFound(outpoint.txid))?;
-        //                 Ok(WeightedUtxo {
-        //                     satisfaction_weight: self
-        //                         .public_descriptor(keychain)
-        //                         .max_weight_to_satisfy()
-        //                         .expect("descriptor should be satisfiable"),
-        //                     utxo: Utxo::Local(LocalOutput {
-        //                         outpoint,
-        //                         txout,
-        //                         keychain,
-        //                         is_spent: true,
-        //                         derivation_index,
-        //                         chain_position,
-        //                     }),
-        //                 })
-        //             }
-        //             None => Ok(WeightedUtxo {
-        //                 satisfaction_weight: Weight::from_wu_usize(
-        //                     serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
-        //                 ),
-        //                 utxo: Utxo::Foreign {
-        //                     outpoint,
-        //                     sequence: txin.sequence,
-        //                     psbt_input: Box::new(psbt::Input {
-        //                         witness_utxo: prev_txout
-        //                             .script_pubkey
-        //                             .witness_version()
-        //                             .map(|_| prev_txout),
-        //                         non_witness_utxo: tx_graph
-        //                             .get_tx(outpoint.txid)
-        //                             .map(|tx| tx.as_ref().clone()),
-        //                         ..Default::default()
-        //                     }),
-        //                 },
-        //             }),
-        //         }
-        //     })
-        //     .collect::<Result<_, _>>()?;
+// // Remove the inputs from the tx and process them.
+// let utxos: Vec<WeightedUtxo> = tx
+//     .input
+//     .drain(..)
+//     .map(|txin| -> Result<_, BuildFeeBumpError> {
+//         let outpoint = txin.previous_output;
+//         let prev_txout = tx_graph
+//             .get_txout(outpoint)
+//             .cloned()
+//             .ok_or(BuildFeeBumpError::UnknownUtxo(outpoint))?;
+//         match txout_index.index_of_spk(prev_txout.script_pubkey.clone()) {
+//             Some(&(keychain, derivation_index)) => {
+//                 let txout = prev_txout;
+//                 let chain_position = chain_positions
+//                     .get(&outpoint.txid)
+//                     .cloned()
+//                     .ok_or(BuildFeeBumpError::TransactionNotFound(outpoint.txid))?;
+//                 Ok(WeightedUtxo {
+//                     satisfaction_weight: self
+//                         .public_descriptor(keychain)
+//                         .max_weight_to_satisfy()
+//                         .expect("descriptor should be satisfiable"),
+//                     utxo: Utxo::Local(LocalOutput {
+//                         outpoint,
+//                         txout,
+//                         keychain,
+//                         is_spent: true,
+//                         derivation_index,
+//                         chain_position,
+//                     }),
+//                 })
+//             }
+//             None => Ok(WeightedUtxo {
+//                 satisfaction_weight: Weight::from_wu_usize(
+//                     serialize(&txin.script_sig).len() * 4 + serialize(&txin.witness).len(),
+//                 ),
+//                 utxo: Utxo::Foreign {
+//                     outpoint,
+//                     sequence: txin.sequence,
+//                     psbt_input: Box::new(psbt::Input {
+//                         witness_utxo: prev_txout
+//                             .script_pubkey
+//                             .witness_version()
+//                             .map(|_| prev_txout),
+//                         non_witness_utxo: tx_graph
+//                             .get_tx(outpoint.txid)
+//                             .map(|tx| tx.as_ref().clone()),
+//                         ..Default::default()
+//                     }),
+//                 },
+//             }),
+//         }
+//     })
+//     .collect::<Result<_, _>>()?;
 
 //         if tx.output.len() > 1 {
 //             let mut change_index = None;
@@ -2246,20 +1979,20 @@ where
 //             }
 //         }
 
-        // let params = TxParams {
-        //     version: Some(tx.version),
-        //     recipients: tx
-        //         .output
-        //         .into_iter()
-        //         .map(|txout| (txout.script_pubkey, txout.value))
-        //         .collect(),
-        //     utxos,
-        //     bumping_fee: Some(tx_builder::PreviousFee {
-        //         absolute: fee,
-        //         rate: fee_rate,
-        //     }),
-        //     ..Default::default()
-        // };
+// let params = TxParams {
+//     version: Some(tx.version),
+//     recipients: tx
+//         .output
+//         .into_iter()
+//         .map(|txout| (txout.script_pubkey, txout.value))
+//         .collect(),
+//     utxos,
+//     bumping_fee: Some(tx_builder::PreviousFee {
+//         absolute: fee,
+//         rate: fee_rate,
+//     }),
+//     ..Default::default()
+// };
 
 //         Ok(TxBuilder {
 //             wallet: self,
@@ -2827,146 +2560,6 @@ where
 //         &self.chain
 //     }
 
-//     /// Introduces a `block` of `height` to the wallet, and tries to connect it to the
-//     /// `prev_blockhash` of the block's header.
-//     ///
-//     /// This is a convenience method that is equivalent to calling [`apply_block_connected_to`]
-//     /// with `prev_blockhash` and `height-1` as the `connected_to` parameter.
-//     ///
-//     /// [`apply_block_connected_to`]: Self::apply_block_connected_to
-//     pub fn apply_block(&mut self, block: &Block, height: u32) -> Result<(), CannotConnectError> {
-//         let connected_to = match height.checked_sub(1) {
-//             Some(prev_height) => BlockId {
-//                 height: prev_height,
-//                 hash: block.header.prev_blockhash,
-//             },
-//             None => BlockId {
-//                 height,
-//                 hash: block.block_hash(),
-//             },
-//         };
-//         self.apply_block_connected_to(block, height, connected_to)
-//             .map_err(|err| match err {
-//                 ApplyHeaderError::InconsistentBlocks => {
-//                     unreachable!("connected_to is derived from the block so must be consistent")
-//                 }
-//                 ApplyHeaderError::CannotConnect(err) => err,
-//             })
-//     }
-
-//     /// Applies relevant transactions from `block` of `height` to the wallet, and connects the
-//     /// block to the internal chain.
-//     ///
-//     /// The `connected_to` parameter informs the wallet how this block connects to the internal
-//     /// [`LocalChain`]. Relevant transactions are filtered from the `block` and inserted into the
-//     /// internal [`TxGraph`].
-//     ///
-//     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
-//     /// if you need the inserted block data to be reloaded after closing the wallet.
-//     /// See [`Wallet::reveal_next_address`].
-//     pub fn apply_block_connected_to(
-//         &mut self,
-//         block: &Block,
-//         height: u32,
-//         connected_to: BlockId,
-//     ) -> Result<(), ApplyHeaderError> {
-//         let mut changeset = ChangeSet::default();
-//         changeset.merge(
-//             self.chain
-//                 .apply_header_connected_to(&block.header, height, connected_to)?
-//                 .into(),
-//         );
-//         changeset.merge(
-//             self.indexed_graph
-//                 .apply_block_relevant(block, height)
-//                 .into(),
-//         );
-//         self.stage.merge(changeset);
-//         Ok(())
-//     }
-
-//     /// Apply relevant unconfirmed transactions to the wallet.
-//     ///
-//     /// Transactions that are not relevant are filtered out.
-//     ///
-//     /// This method takes in an iterator of `(tx, last_seen)` where `last_seen` is the timestamp
-// of     /// when the transaction was last seen in the mempool. This is used for conflict
-// resolution     /// when there is conflicting unconfirmed transactions. The transaction with the
-// later     /// `last_seen` is prioritized.
-//     ///
-//     /// **WARNING**: You must persist the changes resulting from one or more calls to this method
-//     /// if you need the applied unconfirmed transactions to be reloaded after closing the wallet.
-//     /// See [`Wallet::reveal_next_address`].
-//     pub fn apply_unconfirmed_txs<T: Into<Arc<Transaction>>>(
-//         &mut self,
-//         unconfirmed_txs: impl IntoIterator<Item = (T, u64)>,
-//     ) {
-//         let indexed_graph_changeset = self
-//             .indexed_graph
-//             .batch_insert_relevant_unconfirmed(unconfirmed_txs);
-//         self.stage.merge(indexed_graph_changeset.into());
-//     }
-
-//     /// Apply evictions of the given transaction IDs with their associated timestamps.
-//     ///
-//     /// This function is used to mark specific unconfirmed transactions as evicted from the
-// mempool.     /// Eviction means that these transactions are not considered canonical by default,
-// and will     /// no longer be part of the wallet's [`transactions`] set. This can happen for
-// example when     /// a transaction is dropped from the mempool due to low fees or conflicts with
-// another     /// transaction.
-//     ///
-//     /// Only transactions that are currently unconfirmed and canonical are considered for
-// eviction.     /// Transactions that are not relevant to the wallet are ignored. Note that an
-// evicted     /// transaction can become canonical again if it is later observed on-chain or seen
-// in the     /// mempool with a higher priority (e.g., due to a fee bump).
-//     ///
-//     /// ## Parameters
-//     ///
-//     /// `evicted_txs`: An iterator of `(Txid, u64)` tuples, where:
-//     /// - `Txid`: The transaction ID of the transaction to be evicted.
-//     /// - `u64`: The timestamp indicating when the transaction was evicted from the mempool. This
-//     ///   will usually correspond to the time of the latest chain sync. See docs for
-//     ///   [`start_sync_with_revealed_spks`].
-//     ///
-//     /// ## Notes
-//     ///
-//     /// - Not all blockchain backends support automatic mempool eviction handling - this method
-// may     ///   be used in such cases. It can also be used to negate the effect of
-//     ///   [`apply_unconfirmed_txs`] for a particular transaction without the need for an
-// additional     ///   sync.
-//     /// - The changes are staged in the wallet's internal state and must be persisted to ensure
-// they     ///   are retained across wallet restarts. Use [`Wallet::take_staged`] to retrieve the
-// staged     ///   changes and persist them to your database of choice.
-//     /// - Evicted transactions are removed from the wallet's canonical transaction set, but the
-// data     ///   remains in the wallet's internal transaction graph for historical purposes.
-//     /// - Ensure that the timestamps provided are accurate and monotonically increasing, as they
-//     ///   influence the wallet's canonicalization logic.
-//     ///
-//     /// [`transactions`]: Wallet::transactions
-//     /// [`apply_unconfirmed_txs`]: Wallet::apply_unconfirmed_txs
-//     /// [`start_sync_with_revealed_spks`]: Wallet::start_sync_with_revealed_spks
-//     pub fn apply_evicted_txs(&mut self, evicted_txs: impl IntoIterator<Item = (Txid, u64)>) {
-//         let chain = &self.chain;
-//         let canon_txids: Vec<Txid> = self
-//             .indexed_graph
-//             .graph()
-//             .list_canonical_txs(
-//                 chain,
-//                 chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//             )
-//             .map(|c| c.tx_node.txid)
-//             .collect();
-
-//         let changeset = self.indexed_graph.batch_insert_relevant_evicted_at(
-//             evicted_txs
-//                 .into_iter()
-//                 .filter(|(txid, _)| canon_txids.contains(txid)),
-//         );
-
-//         self.stage.merge(changeset.into());
-//     }
-
 //     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
 //     /// keychain with an associated descriptor. For example in case the wallet was created
 //     /// with only one keychain, passing [`KeychainKind::Internal`] here will instead return
@@ -2977,81 +2570,6 @@ where
 //         } else {
 //             keychain
 //         }
-//     }
-// }
-
-// /// Methods to construct sync/full-scan requests for spk-based chain sources.
-// impl Wallet {
-//     /// Create a partial [`SyncRequest`] for all revealed spks at `start_time`.
-//     ///
-//     /// The `start_time` is used to record the time that a mempool transaction was last seen
-//     /// (or evicted). See [`Wallet::start_sync_with_revealed_spks`] for more.
-//     pub fn start_sync_with_revealed_spks_at(
-//         &self,
-//         start_time: u64,
-//     ) -> SyncRequestBuilder<(KeychainKind, u32)> {
-//         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
-//         SyncRequest::builder_at(start_time)
-//             .chain_tip(self.chain.tip())
-//             .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
-//             .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 ..,
-//             ))
-//     }
-
-//     /// Create a partial [`SyncRequest`] for this wallet for all revealed spks.
-//     ///
-//     /// This is the first step when performing a spk-based wallet partial sync, the returned
-//     /// [`SyncRequest`] collects all revealed script pubkeys from the wallet keychain needed to
-//     /// start a blockchain sync with a spk based blockchain client.
-//     ///
-//     /// The time of the sync is the current system time and is used to record the
-//     /// tx last-seen for mempool transactions. Or if an expected transaction is missing
-//     /// or evicted, it is the time of the eviction. Note that timestamps may only increase
-//     /// to be counted by the tx graph. To supply your own start time see
-//     /// [`Wallet::start_sync_with_revealed_spks_at`].
-//     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-//     #[cfg(feature = "std")]
-//     pub fn start_sync_with_revealed_spks(&self) -> SyncRequestBuilder<(KeychainKind, u32)> {
-//         use bdk_chain::keychain_txout::SyncRequestBuilderExt;
-//         SyncRequest::builder()
-//             .chain_tip(self.chain.tip())
-//             .revealed_spks_from_indexer(&self.indexed_graph.index, ..)
-//             .expected_spk_txids(self.indexed_graph.list_expected_spk_txids(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 ..,
-//             ))
-//     }
-
-//     /// Create a [`FullScanRequest] for this wallet.
-//     ///
-//     /// This is the first step when performing a spk-based wallet full scan, the returned
-//     /// [`FullScanRequest] collects iterators for the wallet's keychain script pub keys needed to
-//     /// start a blockchain full scan with a spk based blockchain client.
-//     ///
-//     /// This operation is generally only used when importing or restoring a previously used
-// wallet     /// in which the list of used scripts is not known.
-//     ///
-//     /// The time of the scan is the current system time and is used to record the tx last-seen
-// for     /// mempool transactions. To supply your own start time see
-// [`Wallet::start_full_scan_at`].     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
-//     #[cfg(feature = "std")]
-//     pub fn start_full_scan(&self) -> FullScanRequestBuilder<KeychainKind> {
-//         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
-//         FullScanRequest::builder()
-//             .chain_tip(self.chain.tip())
-//             .spks_from_indexer(&self.indexed_graph.index)
-//     }
-
-//     /// Create a [`FullScanRequest`] builder at `start_time`.
-//     pub fn start_full_scan_at(&self, start_time: u64) -> FullScanRequestBuilder<KeychainKind> {
-//         use bdk_chain::keychain_txout::FullScanRequestBuilderExt;
-//         FullScanRequest::builder_at(start_time)
-//             .chain_tip(self.chain.tip())
-//             .spks_from_indexer(&self.indexed_graph.index)
 //     }
 // }
 
@@ -3090,11 +2608,14 @@ where
     Ok(wallet_name)
 }
 
-fn new_local_utxo(
-    keychain: KeychainKind,
+fn new_local_utxo<K>(
+    keychain: K,
     derivation_index: u32,
     full_txo: FullTxOut<ConfirmationBlockTime>,
-) -> LocalOutput {
+) -> LocalOutput<K>
+where
+    K: Clone,
+{
     LocalOutput {
         outpoint: full_txo.outpoint,
         txout: full_txo.txout,

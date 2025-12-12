@@ -48,9 +48,12 @@ use bitcoin::{
 };
 use rand_core::RngCore;
 
-use super::coin_selection::CoinSelectionAlgorithm;
+// use super::coin_selection::CoinSelectionAlgorithm;
 use super::utils::shuffle_slice;
-use super::{CreateTxError, Wallet};
+use super::{
+    // CreateTxError,
+    Wallet,
+};
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 
@@ -115,32 +118,32 @@ use crate::{KeychainKind, LocalOutput, Utxo, WeightedUtxo};
 //     pub(crate) coin_selection: Cs,
 // }
 
-/// The parameters for transaction creation sans coin selection algorithm.
-//TODO: TxParams should eventually be exposed publicly.
-#[derive(Default, Debug, Clone)]
-pub(crate) struct TxParams {
-    pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
-    pub(crate) drain_wallet: bool,
-    pub(crate) drain_to: Option<ScriptBuf>,
-    pub(crate) fee_policy: Option<FeePolicy>,
-    pub(crate) internal_policy_path: Option<BTreeMap<String, Vec<usize>>>,
-    pub(crate) external_policy_path: Option<BTreeMap<String, Vec<usize>>>,
-    pub(crate) utxos: Vec<WeightedUtxo>,
-    pub(crate) unspendable: HashSet<OutPoint>,
-    pub(crate) manually_selected_only: bool,
-    pub(crate) sighash: Option<psbt::PsbtSighashType>,
-    pub(crate) ordering: TxOrdering,
-    pub(crate) locktime: Option<absolute::LockTime>,
-    pub(crate) sequence: Option<Sequence>,
-    pub(crate) version: Option<Version>,
-    pub(crate) change_policy: ChangeSpendPolicy,
-    pub(crate) only_witness_utxo: bool,
-    pub(crate) add_global_xpubs: bool,
-    pub(crate) include_output_redeem_witness_script: bool,
-    pub(crate) bumping_fee: Option<PreviousFee>,
-    pub(crate) current_height: Option<absolute::LockTime>,
-    pub(crate) allow_dust: bool,
-}
+// /// The parameters for transaction creation sans coin selection algorithm.
+// //TODO: TxParams should eventually be exposed publicly.
+// #[derive(Default, Debug, Clone)]
+// pub(crate) struct TxParams {
+// pub(crate) recipients: Vec<(ScriptBuf, Amount)>,
+// pub(crate) drain_wallet: bool,
+// pub(crate) drain_to: Option<ScriptBuf>,
+// pub(crate) fee_policy: Option<FeePolicy>,
+// pub(crate) internal_policy_path: Option<BTreeMap<String, Vec<usize>>>,
+// pub(crate) external_policy_path: Option<BTreeMap<String, Vec<usize>>>,
+// pub(crate) utxos: Vec<WeightedUtxo>,
+// pub(crate) unspendable: HashSet<OutPoint>,
+// pub(crate) manually_selected_only: bool,
+// pub(crate) sighash: Option<psbt::PsbtSighashType>,
+// pub(crate) ordering: TxOrdering,
+// pub(crate) locktime: Option<absolute::LockTime>,
+// pub(crate) sequence: Option<Sequence>,
+// pub(crate) version: Option<Version>,
+// pub(crate) change_policy: ChangeSpendPolicy,
+// pub(crate) only_witness_utxo: bool,
+// pub(crate) add_global_xpubs: bool,
+// pub(crate) include_output_redeem_witness_script: bool,
+// pub(crate) bumping_fee: Option<PreviousFee>,
+// pub(crate) current_height: Option<absolute::LockTime>,
+// pub(crate) allow_dust: bool,
+// }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PreviousFee {
@@ -904,27 +907,27 @@ impl TxOrdering {
     }
 }
 
-/// Policy regarding the use of change outputs when creating a transaction
-#[derive(Default, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Copy)]
-pub enum ChangeSpendPolicy {
-    /// Use both change and non-change outputs (default)
-    #[default]
-    ChangeAllowed,
-    /// Only use change outputs (see [`TxBuilder::only_spend_change`])
-    OnlyChange,
-    /// Only use non-change outputs (see [`TxBuilder::do_not_spend_change`])
-    ChangeForbidden,
-}
-
-impl ChangeSpendPolicy {
-    pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput) -> bool {
-        match self {
-            ChangeSpendPolicy::ChangeAllowed => true,
-            ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Internal,
-            ChangeSpendPolicy::ChangeForbidden => utxo.keychain == KeychainKind::External,
-        }
-    }
-}
+// /// Policy regarding the use of change outputs when creating a transaction
+// #[derive(Default, Debug, Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Copy)]
+// pub enum ChangeSpendPolicy {
+//     /// Use both change and non-change outputs (default)
+//     #[default]
+//     ChangeAllowed,
+//     /// Only use change outputs (see [`TxBuilder::only_spend_change`])
+//     OnlyChange,
+//     /// Only use non-change outputs (see [`TxBuilder::do_not_spend_change`])
+//     ChangeForbidden,
+// }
+//
+// impl ChangeSpendPolicy {
+//     pub(crate) fn is_satisfied_by(&self, utxo: &LocalOutput) -> bool {
+//         match self {
+//             ChangeSpendPolicy::ChangeAllowed => true,
+//             ChangeSpendPolicy::OnlyChange => utxo.keychain == KeychainKind::Internal,
+//             ChangeSpendPolicy::ChangeForbidden => utxo.keychain == KeychainKind::External,
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod test {
@@ -1088,7 +1091,7 @@ mod test {
         assert_ne!(tx_2, original_tx);
     }
 
-    fn get_test_utxos() -> Vec<LocalOutput> {
+    fn get_test_utxos() -> Vec<LocalOutput<KeychainKind>> {
         use bitcoin::hashes::Hash;
 
         vec![
@@ -1129,40 +1132,40 @@ mod test {
         ]
     }
 
-    #[test]
-    fn test_change_spend_policy_default() {
-        let change_spend_policy = ChangeSpendPolicy::default();
-        let filtered = get_test_utxos()
-            .into_iter()
-            .filter(|u| change_spend_policy.is_satisfied_by(u))
-            .count();
+    // #[test]
+    // fn test_change_spend_policy_default() {
+    //     let change_spend_policy = ChangeSpendPolicy::default();
+    //     let filtered = get_test_utxos()
+    //         .into_iter()
+    //         .filter(|u| change_spend_policy.is_satisfied_by(u))
+    //         .count();
 
-        assert_eq!(filtered, 2);
-    }
+    //     assert_eq!(filtered, 2);
+    // }
 
-    #[test]
-    fn test_change_spend_policy_no_internal() {
-        let change_spend_policy = ChangeSpendPolicy::ChangeForbidden;
-        let filtered = get_test_utxos()
-            .into_iter()
-            .filter(|u| change_spend_policy.is_satisfied_by(u))
-            .collect::<Vec<_>>();
+    // #[test]
+    // fn test_change_spend_policy_no_internal() {
+    //     let change_spend_policy = ChangeSpendPolicy::ChangeForbidden;
+    //     let filtered = get_test_utxos()
+    //         .into_iter()
+    //         .filter(|u| change_spend_policy.is_satisfied_by(u))
+    //         .collect::<Vec<_>>();
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].keychain, KeychainKind::External);
-    }
+    //     assert_eq!(filtered.len(), 1);
+    //     assert_eq!(filtered[0].keychain, KeychainKind::External);
+    // }
 
-    #[test]
-    fn test_change_spend_policy_only_internal() {
-        let change_spend_policy = ChangeSpendPolicy::OnlyChange;
-        let filtered = get_test_utxos()
-            .into_iter()
-            .filter(|u| change_spend_policy.is_satisfied_by(u))
-            .collect::<Vec<_>>();
+    // #[test]
+    // fn test_change_spend_policy_only_internal() {
+    //     let change_spend_policy = ChangeSpendPolicy::OnlyChange;
+    //     let filtered = get_test_utxos()
+    //         .into_iter()
+    //         .filter(|u| change_spend_policy.is_satisfied_by(u))
+    //         .collect::<Vec<_>>();
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].keychain, KeychainKind::Internal);
-    }
+    //     assert_eq!(filtered.len(), 1);
+    //     assert_eq!(filtered[0].keychain, KeychainKind::Internal);
+    // }
 
     // #[test]
     // fn test_exclude_unconfirmed() {
