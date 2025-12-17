@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::Wallet;
 use bitcoin::Network;
@@ -58,12 +60,16 @@ fn main() {
         time_of_week_keychain: DayType::AnyDay,
     };
 
-    let mut keyring: KeyRing<KeychainId> =
-        KeyRing::new(Network::Signet, keychain_1, DESC_1).unwrap();
-    keyring.add_descriptor(keychain_2, DESC_2, false).unwrap();
-    keyring.add_descriptor(keychain_3, DESC_3, false).unwrap();
-    keyring.add_descriptor(keychain_4, DESC_4, false).unwrap();
-    keyring.add_descriptor(keychain_5, DESC_5, false).unwrap();
+    let descriptors: BTreeMap<KeychainId, &str> = [
+        (keychain_1, DESC_1),
+        (keychain_2, DESC_2),
+        (keychain_3, DESC_3),
+        (keychain_4, DESC_4),
+        (keychain_5, DESC_5),
+    ]
+    .into();
+
+    let keyring = KeyRing::new_with_descriptors(Network::Signet, descriptors, None).unwrap();
 
     // DESC_1 is the default keychain (the first one added to the keyring is automatically the
     // default keychain), but this can also be changed later on with the

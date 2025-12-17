@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use bdk_wallet::chain::DescriptorExt;
 use bdk_wallet::descriptor::DescriptorError;
 use bdk_wallet::keyring::{self, KeyRing};
@@ -38,14 +40,19 @@ fn test_8_keychains_keyring() {
     const DESC_7: &str = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/6/*)";
     const DESC_8: &str = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/7/*)";
 
-    let mut keyring = KeyRing::new(Network::Regtest, 1, DESC_1).unwrap();
-    keyring.add_descriptor(2, DESC_2, false).unwrap();
-    keyring.add_descriptor(3, DESC_3, false).unwrap();
-    keyring.add_descriptor(4, DESC_4, false).unwrap();
-    keyring.add_descriptor(5, DESC_5, false).unwrap();
-    keyring.add_descriptor(6, DESC_6, false).unwrap();
-    keyring.add_descriptor(7, DESC_7, false).unwrap();
-    keyring.add_descriptor(8, DESC_8, false).unwrap();
+    let descriptors: BTreeMap<u8, &str> = [
+        (1, DESC_1),
+        (2, DESC_2),
+        (3, DESC_3),
+        (4, DESC_4),
+        (5, DESC_5),
+        (6, DESC_6),
+        (7, DESC_7),
+        (8, DESC_8),
+    ]
+    .into();
+
+    let keyring = KeyRing::new_with_descriptors(Network::Regtest, descriptors, Some(1)).unwrap();
 
     assert_eq!(keyring.default_keychain(), 1);
     assert_eq!(keyring.list_keychains().len(), 8);

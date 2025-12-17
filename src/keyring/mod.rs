@@ -66,6 +66,44 @@ where
         })
     }
 
+    /// Construct a new [`KeyRing`] with the provided `network` and a <Keychain, Descriptor> map and
+    /// the `default_keychain`.
+    ///
+    /// Specifying `default_keychain` as `None` will assign the first keychain according to the
+    /// `Ord` implementation as the default.
+    ///
+    /// Uses [`KeyRing::new`] and [`KeyRing::add_descriptor`] underneath.
+    pub fn new_with_descriptors<D: IntoWalletDescriptor>(
+        network: Network,
+        descriptors: BTreeMap<K, D>,
+        default_keychain: Option<K>,
+    ) -> Result<Self, DescriptorError> {
+        // ToDo: maybe we can use something more generic than a map?
+        // ToDo: handle error
+        if descriptors.is_empty() {
+            panic!()
+        };
+
+        let mut desc_iter = descriptors.into_iter();
+        let (keychain, desc) = desc_iter.next().expect("descriptors is non-empty");
+        let mut keyring = KeyRing::new(network, keychain.clone(), desc)?;
+
+        let curr_default = match default_keychain {
+            Some(curr_default) => curr_default,
+            None => keychain,
+        };
+
+        for (keychain, desc) in desc_iter {
+            let mut default = false;
+            if curr_default == keychain {
+                default = true;
+            }
+            keyring.add_descriptor(keychain, desc, default)?;
+        }
+
+        Ok(keyring)
+    }
+
     /// Get the [`Network`] corresponding to the [`KeyRing`]
     pub fn network(&self) -> &Network {
         &self.network
