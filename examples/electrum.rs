@@ -8,8 +8,8 @@ use bdk_wallet::chain::collections::HashSet;
 use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::rusqlite::Connection;
-use bdk_wallet::Wallet;
 use bdk_wallet::{KeychainKind, LoadParams, SignOptions};
+use bdk_wallet::{PersistedWallet, Wallet};
 use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
@@ -33,7 +33,7 @@ fn main() -> Result<(), anyhow::Error> {
         .check_genesis_hash(bitcoin::constants::genesis_block(NETWORK).block_hash())
         .check_network(NETWORK);
 
-    let mut wallet = match Wallet::<KeychainKind>::from_sqlite(&mut db, params).unwrap() {
+    let mut wallet = match params.load_wallet(&mut db).unwrap() {
         Some(wallet) => wallet,
         None => {
             let mut keyring: KeyRing<KeychainKind> =
@@ -42,12 +42,12 @@ fn main() -> Result<(), anyhow::Error> {
                 .add_descriptor(KeychainKind::Internal, INTERNAL_DESC, false)
                 .unwrap();
 
-            Wallet::new(keyring)
+            Wallet::create(keyring).create_wallet(&mut db)?
         }
     };
 
     let address = wallet.next_unused_address(KeychainKind::External).unwrap();
-    wallet.persist_to_sqlite(&mut db)?;
+    wallet.persist(&mut db)?;
     println!("Generated Address: {address}");
 
     let balance = wallet.balance();
@@ -77,7 +77,7 @@ fn main() -> Result<(), anyhow::Error> {
     println!();
 
     wallet.apply_update(update)?;
-    wallet.persist_to_sqlite(&mut db)?;
+    wallet.persist(&mut db)?;
 
     let balance = wallet.balance();
     println!("Wallet balance after full sync: {}", balance.total());

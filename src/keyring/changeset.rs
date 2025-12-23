@@ -82,7 +82,7 @@ where
     }
 
     /// Initialize sqlite tables
-    pub fn init_sqlite_tables(db_tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    pub(crate) fn init_sqlite_tables(db_tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
         bdk_chain::rusqlite_impl::migrate_schema(db_tx, Self::SCHEMA_NAME, &[&Self::schema_v0()])?;
         Ok(())
     }
@@ -90,7 +90,7 @@ where
     /// Construct the `KeyRing` from persistence
     ///
     /// Remember to call [`Self::init_sqlite_tables`] beforehand.
-    pub fn from_sqlite(db_tx: &rusqlite::Transaction) -> rusqlite::Result<Self> {
+    pub(crate) fn from_sqlite(db_tx: &rusqlite::Transaction) -> rusqlite::Result<Self> {
         let mut changeset = Self::default();
         let mut network_stmt = db_tx.prepare(&format!(
             "SELECT network FROM {} WHERE id = 0",
@@ -132,7 +132,7 @@ where
     /// Persist the `KeyRing`
     ///
     /// Remember to call [`Self::init_sqlite_tables`] beforehand.
-    pub fn persist_to_sqlite(&self, db_tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    pub(crate) fn persist_to_sqlite(&self, db_tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
         use rusqlite::named_params;
         let mut network_stmt = db_tx.prepare_cached(&format!(
             "INSERT OR IGNORE INTO {}(id, network) VALUES(:id, :network)",

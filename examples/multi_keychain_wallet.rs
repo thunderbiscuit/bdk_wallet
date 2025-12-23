@@ -77,7 +77,7 @@ fn main() {
     // APIs like `Wallet::reveal_next_default_address()` which will always work with your
     // default keychain.
 
-    let mut wallet = Wallet::new(keyring);
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     let address1 = wallet.reveal_next_default_address();
     println!("Default keychain address: {}", address1.address);

@@ -18,7 +18,7 @@ fn main() {
         .check_descriptor(KeychainKind::Internal, Some(INTERNAL_DESCRIPTOR))
         .check_genesis_hash(bitcoin::constants::genesis_block(Network::Regtest).block_hash())
         .check_network(Network::Regtest);
-    let mut wallet = match Wallet::<KeychainKind>::from_sqlite(&mut conn, params).unwrap() {
+    let mut wallet = match params.load_wallet(&mut conn).unwrap() {
         Some(wallet) => wallet,
         None => {
             let mut keyring: KeyRing<KeychainKind> = KeyRing::new(
@@ -31,10 +31,10 @@ fn main() {
                 .add_descriptor(KeychainKind::Internal, INTERNAL_DESCRIPTOR, false)
                 .unwrap();
 
-            Wallet::new(keyring)
+            Wallet::create(keyring).create_wallet(&mut conn).unwrap()
         }
     };
     let address = wallet.reveal_next_address(KeychainKind::External).unwrap();
     println!("Address at index {}: {}", address.index, address.address);
-    wallet.persist_to_sqlite(&mut conn).unwrap();
+    wallet.persist(&mut conn).unwrap();
 }

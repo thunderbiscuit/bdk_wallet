@@ -241,7 +241,7 @@ mod common;
 fn check_balance_two() {
     let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)").unwrap();
     keyring.add_descriptor(KeychainKind::Internal, "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/5/*)", false);
-    let mut wallet = Wallet::new(keyring);
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
     let receive_address = wallet
         .reveal_next_address(KeychainKind::External)
         .unwrap()

@@ -5,7 +5,7 @@ use bdk_wallet::{
     bitcoin::{Amount, FeeRate, Network},
     keyring::KeyRing,
     psbt::PsbtUtils,
-    KeychainKind, LoadParams, SignOptions, Wallet,
+    KeychainKind, LoadParams, PersistedWallet, SignOptions, Wallet,
 };
 use std::thread::sleep;
 use std::time::Duration;
@@ -30,7 +30,7 @@ fn main() -> Result<(), anyhow::Error> {
         .check_genesis_hash(bitcoin::constants::genesis_block(NETWORK).block_hash())
         .check_network(NETWORK);
 
-    let mut wallet = match Wallet::<KeychainKind>::from_sqlite(&mut db, params).unwrap() {
+    let mut wallet = match params.load_wallet(&mut db).unwrap() {
         Some(wallet) => wallet,
         None => {
             let mut keyring: KeyRing<KeychainKind> =
@@ -39,12 +39,12 @@ fn main() -> Result<(), anyhow::Error> {
                 .add_descriptor(KeychainKind::Internal, INTERNAL_DESC, false)
                 .unwrap();
 
-            Wallet::new(keyring)
+            Wallet::create(keyring).create_wallet(&mut db)?
         }
     };
 
     let address = wallet.next_unused_address(KeychainKind::External).unwrap();
-    wallet.persist_to_sqlite(&mut db)?;
+    wallet.persist(&mut db)?;
     println!("Generated Address: {address}");
 
     let balance = wallet.balance();
@@ -67,7 +67,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     let update = client.full_scan(request, STOP_GAP, PARALLEL_REQUESTS)?;
     wallet.apply_update(update)?;
-    wallet.persist_to_sqlite(&mut db)?;
+    wallet.persist(&mut db)?;
     println!();
 
     let balance = wallet.balance();
