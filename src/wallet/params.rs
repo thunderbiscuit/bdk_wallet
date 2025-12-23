@@ -1,17 +1,20 @@
 #![allow(unused)]
-use alloc::{boxed::Box, collections::btree_map::BTreeMap};
+use alloc::{boxed::Box, collections::btree_map::BTreeMap, fmt};
 use bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD;
 use bitcoin::{BlockHash, Network, NetworkKind};
 use miniscript::descriptor::KeyMap;
 
 use crate::{
     descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
-    utils::SecpCtx,
-    // AsyncWalletPersister, CreateWithPersistError,
+    keyring::{self, KeyRing},
+    utils::SecpCtx, // WalletPersister,
+    AsyncWalletPersister,
+    CreateWithPersistError,
     KeychainKind,
     LoadWithPersistError,
+    PersistedWallet,
     Wallet,
-    // WalletPersister,
+    WalletPersister,
 };
 
 use super::{
@@ -65,103 +68,56 @@ where
 
 /// Parameters for [`Wallet::create`] or [`PersistedWallet::create`].
 #[must_use]
-pub struct CreateParams {
-    pub(crate) descriptor: DescriptorToExtract,
-    pub(crate) descriptor_keymap: KeyMap,
-    pub(crate) change_descriptor: Option<DescriptorToExtract>,
-    pub(crate) change_descriptor_keymap: KeyMap,
-    pub(crate) network: Network,
+pub struct CreateParams<K> {
+    pub(crate) keyring: KeyRing<K>,
     pub(crate) genesis_hash: Option<BlockHash>,
     pub(crate) lookahead: u32,
     pub(crate) use_spk_cache: bool,
 }
 
-impl CreateParams {
-    /// Construct parameters with provided `descriptor`.
+impl<K> CreateParams<K>
+where
+    K: Ord + Clone + fmt::Debug,
+{
+    /// Construct parameters with provided `keyring`.
     ///
     /// Default values:
-    /// * `change_descriptor` = `None`
-    /// * `network` = [`Network::Bitcoin`]
     /// * `genesis_hash` = `None`
     /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    ///
-    /// Use this method only when building a wallet with a single descriptor. See
-    /// also [`Wallet::create_single`].
-    pub fn new_single<D: IntoWalletDescriptor + Send + 'static>(descriptor: D) -> Self {
+    /// * `use_spk_cache` = `false`
+    pub fn new(keyring: KeyRing<K>) -> Self {
         Self {
-            descriptor: make_descriptor_to_extract(descriptor),
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor: None,
-            change_descriptor_keymap: KeyMap::default(),
-            network: Network::Bitcoin,
+            keyring,
             genesis_hash: None,
             lookahead: DEFAULT_LOOKAHEAD,
             use_spk_cache: false,
         }
     }
 
-    /// Construct parameters with provided `descriptor` and `change_descriptor`.
-    ///
-    /// Default values:
-    /// * `network` = [`Network::Bitcoin`]
-    /// * `genesis_hash` = `None`
-    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    pub fn new<D: IntoWalletDescriptor + Send + 'static>(
-        descriptor: D,
-        change_descriptor: D,
-    ) -> Self {
-        Self {
-            descriptor: make_descriptor_to_extract(descriptor),
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor: Some(make_descriptor_to_extract(change_descriptor)),
-            change_descriptor_keymap: KeyMap::default(),
-            network: Network::Bitcoin,
-            genesis_hash: None,
-            lookahead: DEFAULT_LOOKAHEAD,
-            use_spk_cache: false,
-        }
-    }
-
-    /// Construct parameters with a two-path descriptor that will be parsed into receive and change
-    /// descriptors.
-    ///
-    /// This function parses a two-path descriptor (receive and change) and creates parameters
-    /// using the existing receive and change wallet creation logic.
-    ///
-    /// Default values:
-    /// * `network` = [`Network::Bitcoin`]
-    /// * `genesis_hash` = `None`
-    /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
-    pub fn new_two_path<D: IntoWalletDescriptor + Send + Clone + 'static>(
-        two_path_descriptor: D,
-    ) -> Self {
-        Self {
-            descriptor: make_two_path_descriptor_to_extract(two_path_descriptor.clone(), 0),
-            descriptor_keymap: KeyMap::default(),
-            change_descriptor: Some(make_two_path_descriptor_to_extract(two_path_descriptor, 1)),
-            change_descriptor_keymap: KeyMap::default(),
-            network: Network::Bitcoin,
-            genesis_hash: None,
-            lookahead: DEFAULT_LOOKAHEAD,
-            use_spk_cache: false,
-        }
-    }
-
-    /// Extend the given `keychain`'s `keymap`.
-    pub fn keymap(mut self, keychain: KeychainKind, keymap: KeyMap) -> Self {
-        match keychain {
-            KeychainKind::External => &mut self.descriptor_keymap,
-            KeychainKind::Internal => &mut self.change_descriptor_keymap,
-        }
-        .extend(keymap);
-        self
-    }
-
-    /// Set [`Self::network`].
-    pub fn network(mut self, network: Network) -> Self {
-        self.network = network;
-        self
-    }
+    // /// Construct parameters with a two-path descriptor that will be parsed into receive and
+    // change /// descriptors.
+    // ///
+    // /// This function parses a two-path descriptor (receive and change) and creates parameters
+    // /// using the existing receive and change wallet creation logic.
+    // ///
+    // /// Default values:
+    // /// * `network` = [`Network::Bitcoin`]
+    // /// * `genesis_hash` = `None`
+    // /// * `lookahead` = [`DEFAULT_LOOKAHEAD`]
+    // pub fn new_two_path<D: IntoWalletDescriptor + Send + Clone + 'static>(
+    //     two_path_descriptor: D,
+    // ) -> Self {
+    //     Self {
+    //         descriptor: make_two_path_descriptor_to_extract(two_path_descriptor.clone(), 0),
+    //         descriptor_keymap: KeyMap::default(),
+    //         change_descriptor: Some(make_two_path_descriptor_to_extract(two_path_descriptor, 1)),
+    //         change_descriptor_keymap: KeyMap::default(),
+    //         network: Network::Bitcoin,
+    //         genesis_hash: None,
+    //         lookahead: DEFAULT_LOOKAHEAD,
+    //         use_spk_cache: false,
+    //     }
+    // }
 
     /// Use a custom `genesis_hash`.
     pub fn genesis_hash(mut self, genesis_hash: BlockHash) -> Self {
@@ -189,33 +145,35 @@ impl CreateParams {
         self
     }
 
-    // /// Create [`PersistedWallet`] with the given [`WalletPersister`].
-    // pub fn create_wallet<P>(
-    //     self,
-    //     persister: &mut P,
-    // ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
-    // where
-    //     P: WalletPersister,
-    // {
-    //     PersistedWallet::create(persister, self)
-    // }
+    /// Create [`PersistedWallet`] with the given [`WalletPersister`].
+    pub fn create_wallet<P>(
+        self,
+        persister: &mut P,
+    ) -> Result<PersistedWallet<P, K>, CreateWithPersistError<P::Error, K>>
+    where
+        P: WalletPersister<K>,
+    {
+        PersistedWallet::create(persister, self)
+    }
 
-    // /// Create [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    // pub async fn create_wallet_async<P>(
-    //     self,
-    //     persister: &mut P,
-    // ) -> Result<PersistedWallet<P>, CreateWithPersistError<P::Error>>
-    // where
-    //     P: AsyncWalletPersister,
-    // {
-    //     PersistedWallet::create_async(persister, self).await
-    // }
+    /// Create [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    pub async fn create_wallet_async<P>(
+        self,
+        persister: &mut P,
+    ) -> Result<PersistedWallet<P, K>, CreateWithPersistError<P::Error, K>>
+    where
+        P: AsyncWalletPersister<K>,
+    {
+        PersistedWallet::create_async(persister, self).await
+    }
 
-    // /// Create [`Wallet`] without persistence.
-    // pub fn create_wallet_no_persist(self) -> Result<Wallet, DescriptorError> {
-    //     Wallet::create_with_params(self)
-    // }
+    /// Create [`Wallet`] without persistence.
+    pub fn create_wallet_no_persist(self) -> Wallet<K> {
+        Wallet::create_with_params(self)
+    }
 }
+
+type PersistedWalletOption<P, K> = Option<PersistedWallet<P, K>>;
 
 /// Parameters for [`Wallet::load`] or [`PersistedWallet::load`].
 #[must_use]
@@ -229,7 +187,10 @@ pub struct LoadParams<K> {
     pub(crate) use_spk_cache: bool,
 }
 
-impl<K> LoadParams<K> {
+impl<K> LoadParams<K>
+where
+    K: Ord + Clone + fmt::Debug,
+{
     /// Construct parameters with default values.
     ///
     /// Default values: `lookahead` = [`DEFAULT_LOOKAHEAD`]
@@ -293,35 +254,41 @@ impl<K> LoadParams<K> {
         self
     }
 
-    // /// Load [`PersistedWallet`] with the given [`WalletPersister`].
-    // pub fn load_wallet<P>(
-    //     self,
-    //     persister: &mut P,
-    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    // where
-    //     P: WalletPersister,
-    // {
-    //     PersistedWallet::load(persister, self)
-    // }
+    /// Load [`PersistedWallet`] with the given [`WalletPersister`].
+    pub fn load_wallet<P>(
+        self,
+        persister: &mut P,
+    ) -> Result<PersistedWalletOption<P, K>, LoadWithPersistError<P::Error, K>>
+    where
+        P: WalletPersister<K>,
+    {
+        PersistedWallet::load(persister, self)
+    }
 
-    // /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
-    // pub async fn load_wallet_async<P>(
-    //     self,
-    //     persister: &mut P,
-    // ) -> Result<Option<PersistedWallet<P>>, LoadWithPersistError<P::Error>>
-    // where
-    //     P: AsyncWalletPersister,
-    // {
-    //     PersistedWallet::load_async(persister, self).await
-    // }
+    /// Load [`PersistedWallet`] with the given [`AsyncWalletPersister`].
+    pub async fn load_wallet_async<P>(
+        self,
+        persister: &mut P,
+    ) -> Result<Option<PersistedWallet<P, K>>, LoadWithPersistError<P::Error, K>>
+    where
+        P: AsyncWalletPersister<K>,
+    {
+        PersistedWallet::load_async(persister, self).await
+    }
 
-    // /// Load [`Wallet`] without persistence.
-    // pub fn load_wallet_no_persist(self, changeset: ChangeSet) -> Result<Option<Wallet>,
-    // LoadError> {     Wallet::load_with_params(changeset, self)
-    // }
+    /// Load [`Wallet`] without persistence.
+    pub fn load_wallet_no_persist(
+        self,
+        changeset: ChangeSet<K>,
+    ) -> Result<Option<Wallet<K>>, LoadError<K>> {
+        Wallet::from_changeset(changeset, self)
+    }
 }
 
-impl<K> Default for LoadParams<K> {
+impl<K> Default for LoadParams<K>
+where
+    K: Ord + Clone + fmt::Debug,
+{
     fn default() -> Self {
         Self::new()
     }

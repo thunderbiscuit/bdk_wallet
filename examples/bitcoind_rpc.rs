@@ -7,7 +7,7 @@ use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Block, Network},
     keyring::KeyRing,
-    KeychainKind, LoadParams, Wallet,
+    KeychainKind, LoadParams, PersistedWallet, Wallet,
 };
 use clap::{self, Parser};
 use std::{
@@ -107,7 +107,7 @@ fn main() -> anyhow::Result<()> {
         params = params.check_descriptor(KeychainKind::Internal, Some(desc.clone()));
     }
 
-    let mut wallet = match Wallet::<KeychainKind>::from_sqlite(&mut db, params).unwrap() {
+    let mut wallet = match params.load_wallet(&mut db).unwrap() {
         Some(wallet) => wallet,
         None => {
             let mut keyring: KeyRing<KeychainKind> = KeyRing::new(
@@ -121,7 +121,7 @@ fn main() -> anyhow::Result<()> {
                     .add_descriptor(KeychainKind::Internal, desc.clone(), false)
                     .unwrap();
             }
-            Wallet::new(keyring)
+            Wallet::create(keyring).create_wallet(&mut db)?
         }
     };
 
@@ -185,7 +185,7 @@ fn main() -> anyhow::Result<()> {
                 let connected_to = block_emission.connected_to();
                 let start_apply_block = Instant::now();
                 wallet.apply_block_connected_to(&block_emission.block, height, connected_to)?;
-                wallet.persist_to_sqlite(&mut db)?;
+                wallet.persist(&mut db)?;
                 let elapsed = start_apply_block.elapsed().as_secs_f32();
                 println!("Applied block {hash} at height {height} in {elapsed}s");
             }
@@ -193,7 +193,7 @@ fn main() -> anyhow::Result<()> {
                 let start_apply_mempool = Instant::now();
                 wallet.apply_evicted_txs(event.evicted);
                 wallet.apply_unconfirmed_txs(event.update);
-                wallet.persist_to_sqlite(&mut db)?;
+                wallet.persist(&mut db)?;
                 println!(
                     "Applied unconfirmed transactions in {}s",
                     start_apply_mempool.elapsed().as_secs_f32()

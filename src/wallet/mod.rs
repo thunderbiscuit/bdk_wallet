@@ -283,33 +283,23 @@ where
     K: Clone + fmt::Debug + Ord,
 {
     /// Construct a new [`Wallet`] with the given `keyring`.
-    ///
-    /// Note: The network must be either the mainnet or one of the test networks. Also default value
-    /// of lookahead is used with no spk_cache.
-    pub fn new(mut keyring: KeyRing<K>) -> Self {
-        Self::with_custom_params(keyring, None, None, false)
+    pub fn create(mut keyring: KeyRing<K>) -> CreateParams<K> {
+        CreateParams::new(keyring)
     }
 
-    /// Construct a new [`Wallet`] with the given `keyring`, `genesis_hash` and `lookahead`.
+    /// Construct a new [`Wallet`] with the given `params`.
     ///
-    /// The `genesis_hash` (if not specified) will be inferred from `keyring.network` and
-    /// `DEFAULT_LOOKAHEAD` will be used in case `lookahead` is not specified.
-    pub fn with_custom_params(
-        mut keyring: KeyRing<K>,
-        genesis_hash: Option<BlockHash>,
-        lookahead: Option<u32>,
-        use_spk_cache: bool,
-    ) -> Self {
-        let network = keyring.network;
+    /// The `genesis_hash` (if not specified) will be inferred from `keyring.network`.
+    pub fn create_with_params(mut params: CreateParams<K>) -> Self {
+        let network = params.keyring.network;
         let genesis_inferred = bitcoin::constants::genesis_block(network).block_hash();
 
         let (chain, chain_changeset) =
-            LocalChain::from_genesis_hash(genesis_hash.unwrap_or(genesis_inferred));
+            LocalChain::from_genesis_hash(params.genesis_hash.unwrap_or(genesis_inferred));
 
-        let mut index =
-            KeychainTxOutIndex::new(lookahead.unwrap_or(DEFAULT_LOOKAHEAD), use_spk_cache);
+        let mut index = KeychainTxOutIndex::new(params.lookahead, params.use_spk_cache);
 
-        let descriptors = core::mem::take(&mut keyring.descriptors);
+        let descriptors = core::mem::take(&mut params.keyring.descriptors);
         for (keychain, desc) in descriptors {
             let _inserted = index
                 .insert_descriptor(keychain, desc)
@@ -322,7 +312,7 @@ where
         let locked_outpoints = HashSet::new();
 
         let stage = ChangeSet {
-            keyring: keyring.initial_changeset(),
+            keyring: params.keyring.initial_changeset(),
             local_chain: chain_changeset,
             tx_graph: bdk_chain::tx_graph::ChangeSet::default(),
             indexer: bdk_chain::keychain_txout::ChangeSet::default(),
@@ -330,7 +320,7 @@ where
         };
 
         Self {
-            keyring,
+            keyring: params.keyring,
             chain,
             tx_graph,
             stage,
@@ -648,41 +638,6 @@ where
         })
     }
 }
-
-// TODO: replace with `PersistedWallet`
-#[cfg(feature = "rusqlite")]
-impl<K> Wallet<K>
-where
-    K: Ord + Clone + Debug + FromSql + ToSql,
-{
-    /// Load a wallet from SQLite.
-    pub fn from_sqlite(
-        conn: &mut rusqlite::Connection,
-        params: LoadParams<K>,
-    ) -> rusqlite::Result<Option<Self>> {
-        let tx = conn.transaction()?;
-        let changeset = ChangeSet::initialize(&tx)?;
-        tx.commit()?;
-
-        Ok(changeset.and_then(|c| Self::from_changeset(c, params).unwrap()))
-    }
-
-    /// Persist the wallet to SQLite
-    pub fn persist_to_sqlite(
-        &mut self,
-        conn: &mut rusqlite::Connection,
-    ) -> rusqlite::Result<Option<ChangeSet<K>>> {
-        let db_tx = conn.transaction()?;
-        match self.staged_changeset() {
-            Some(changeset) => {
-                changeset.persist_to_sqlite(&db_tx)?;
-                db_tx.commit()?;
-                Ok(self.stage.take())
-            }
-            None => Ok(None),
-        }
-    }
-}
 /// An update to [`Wallet`].
 ///
 /// It updates [`KeychainTxOutIndex`], [`bdk_chain::TxGraph`] and [`LocalChain`] atomically.
@@ -768,6 +723,20 @@ where
     /// Returns the latest checkpoint.
     pub fn latest_checkpoint(&self) -> CheckPoint {
         self.chain.tip()
+    }
+
+    /// Get a mutable reference of the staged [`ChangeSet`] that is yet to be committed (if any).
+    pub fn staged_mut(&mut self) -> Option<&mut ChangeSet<K>> {
+        if self.stage.is_empty() {
+            None
+        } else {
+            Some(&mut self.stage)
+        }
+    }
+
+    /// Take the staged [`ChangeSet`] to be persisted now (if any).
+    pub fn take_staged(&mut self) -> Option<ChangeSet<K>> {
+        self.stage.take()
     }
 }
 
@@ -2550,20 +2519,6 @@ where
 //         }
 //     }
 
-//     /// Get a mutable reference of the staged [`ChangeSet`] that is yet to be committed (if any).
-//     pub fn staged_mut(&mut self) -> Option<&mut ChangeSet> {
-//         if self.stage.is_empty() {
-//             None
-//         } else {
-//             Some(&mut self.stage)
-//         }
-//     }
-
-//     /// Take the staged [`ChangeSet`] to be persisted now (if any).
-//     pub fn take_staged(&mut self) -> Option<ChangeSet> {
-//         self.stage.take()
-//     }
-
 //     /// Get a reference to the inner [`TxGraph`].
 //     pub fn tx_graph(&self) -> &TxGraph<ConfirmationBlockTime> {
 //         self.indexed_graph.graph()
@@ -2831,7 +2786,7 @@ mod test {
 
     #[test]
     fn correct_address_is_revealed() {
-        let mut wallet = Wallet::new(test_keyring(DESCRIPTORS));
+        let mut wallet = Wallet::create(test_keyring(DESCRIPTORS)).create_wallet_no_persist();
         let addrinfo = wallet.reveal_next_default_address();
         assert_eq!(
             addrinfo.address.into_unchecked(),

@@ -174,7 +174,7 @@ where
     }
 
     /// Construct `KeyRing` from changeset.
-    pub fn from_changeset(
+    pub(crate) fn from_changeset(
         changeset: ChangeSet<K>,
         check_network: Option<bitcoin::Network>,
         check_descs: BTreeMap<K, Option<DescriptorToExtract>>, /* none means just check if
@@ -246,5 +246,56 @@ where
                 .default_keychain
                 .expect("checked few lines back that default_keychain is not None "),
         }))
+    }
+}
+
+mod test {
+    #[cfg(feature = "rusqlite")]
+    #[test]
+    fn test_persist() {
+        use crate::keyring::{ChangeSet, KeyRing};
+        use bdk_chain::rusqlite;
+        use bdk_wallet::KeychainKind;
+        use bitcoin::Network;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join(".bdk_example_keyring.sqlite");
+
+        // create a keyring and persist it
+        let desc1 = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/0/*)";
+        let keychain1 = KeychainKind::External;
+        let mut keyring = KeyRing::new(Network::Regtest, keychain1, desc1).unwrap();
+        let changeset = keyring.initial_changeset();
+
+        let mut conn = rusqlite::Connection::open(file_path).unwrap();
+        let db_tx = conn.transaction().unwrap();
+
+        ChangeSet::<KeychainKind>::init_sqlite_tables(&db_tx).unwrap();
+        changeset.persist_to_sqlite(&db_tx).unwrap();
+        db_tx.commit().unwrap();
+
+        // add a descriptor to the keyring and persist again
+        let desc2 = "tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/1/*)";
+        let keychain2 = KeychainKind::Internal;
+        let changeset2 = keyring.add_descriptor(keychain2, desc2, true).unwrap();
+
+        let db_tx = conn.transaction().unwrap();
+        changeset2.persist_to_sqlite(&db_tx).unwrap();
+        db_tx.commit().unwrap();
+
+        let db_tx = conn.transaction().unwrap();
+        let keyring_read = KeyRing::from_changeset(
+            ChangeSet::<KeychainKind>::from_sqlite(&db_tx).unwrap(),
+            None,
+            [].into(),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(keyring.list_keychains(), keyring_read.list_keychains());
+        assert_eq!(keyring.network(), keyring_read.network());
+        assert_eq!(keyring.default_keychain(), keyring_read.default_keychain());
     }
 }
