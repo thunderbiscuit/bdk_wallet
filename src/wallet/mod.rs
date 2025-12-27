@@ -328,6 +328,17 @@ where
         }
     }
 
+    /// Build [`Wallet`] by loading from persistence or [`ChangeSet`].
+    ///
+    /// Note that the descriptor secret keys are not persisted to the db.
+    /// You can check the wallet's descriptors are what you expect with [`LoadParams::check_descs`].
+    /// Similarly you can check the [`Network`], `genesis_hash` and the `default_keychain`.
+    /// [`LoadParams::lookahead`] and [`LoadParams::use_spk_cache`] can be used to set those values
+    /// for [`Wallet`].
+    pub fn load() -> LoadParams<K> {
+        LoadParams::new()
+    }
+
     /// Reveal the next address of the default `keychain`.
     ///
     /// This is equivalent to calling [`Self::reveal_next_address`] with the default `keychain` as
