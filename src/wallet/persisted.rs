@@ -452,6 +452,16 @@ fn changeset_info<K: Ord + fmt::Display>(
         );
     }
 
+    writeln!(
+        f,
+        "Default Keychain: {}",
+        changeset
+            .keyring
+            .default_keychain
+            .as_ref()
+            .map_or("None".to_string(), |n| n.to_string())
+    );
+
     let tx_count = changeset.tx_graph.txs.len();
     writeln!(f, "  Transaction Count: {tx_count}")?;
 
