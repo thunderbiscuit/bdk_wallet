@@ -55,6 +55,7 @@ use bitcoin::{
 use miniscript::{
     descriptor::KeyMap,
     psbt::{PsbtExt, PsbtInputExt, PsbtInputSatisfier},
+    Descriptor, DescriptorPublicKey,
 };
 use rand_core::RngCore;
 
@@ -516,6 +517,21 @@ where
     /// Get a reference to the inner [`LocalChain`].
     pub fn local_chain(&self) -> &LocalChain {
         &self.chain
+    }
+
+    /// Get a reference to the [`Wallet`]'s [`Network`].
+    pub fn network(&self) -> Network {
+        self.keyring.network()
+    }
+
+    /// Get the (`keychain, descriptor`) pairs owned by the [`Wallet`]
+    pub fn keychains(&self) -> &BTreeMap<K, Descriptor<DescriptorPublicKey>> {
+        self.keyring.list_keychains()
+    }
+
+    /// Get the `default_keychain`.
+    pub fn default_keychain(&self) -> K {
+        self.keyring.default_keychain()
     }
 
     /// Iterate over relevant and canonical transactions in the wallet.
@@ -2519,15 +2535,6 @@ where
 //         changeset.merge(self.indexed_graph.apply_update(update.tx_update).into());
 //         self.stage.merge(changeset);
 //         Ok(())
-//     }
-
-//     /// Get a reference of the staged [`ChangeSet`] that is yet to be committed (if any).
-//     pub fn staged(&self) -> Option<&ChangeSet> {
-//         if self.stage.is_empty() {
-//             None
-//         } else {
-//             Some(&self.stage)
-//         }
 //     }
 
 //     /// Get a reference to the inner [`TxGraph`].
