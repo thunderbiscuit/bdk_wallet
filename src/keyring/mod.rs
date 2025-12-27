@@ -105,8 +105,8 @@ where
     }
 
     /// Get the [`Network`] corresponding to the [`KeyRing`]
-    pub fn network(&self) -> &Network {
-        &self.network
+    pub fn network(&self) -> Network {
+        self.network
     }
 
     /// Add a descriptor. Must not be [multipath](miniscript::Descriptor::is_multipath).
