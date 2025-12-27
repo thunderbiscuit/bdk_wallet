@@ -42,7 +42,7 @@ impl<K: Ord> Merge for ChangeSet<K> {
     }
 
     fn is_empty(&self) -> bool {
-        self.network.is_none() && self.descriptors.is_empty()
+        self.network.is_none() && self.descriptors.is_empty() && self.default_keychain.is_none()
     }
 }
 

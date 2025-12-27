@@ -297,7 +297,7 @@ where
 
         let mut index = KeychainTxOutIndex::new(params.lookahead, params.use_spk_cache);
 
-        let descriptors = core::mem::take(&mut params.keyring.descriptors);
+        let descriptors = params.keyring.descriptors.clone();
         for (keychain, desc) in descriptors {
             let _inserted = index
                 .insert_descriptor(keychain, desc)
