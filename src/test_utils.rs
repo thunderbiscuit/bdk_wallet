@@ -251,58 +251,63 @@ impl From<ConfirmationBlockTime> for ReceiveTo {
     }
 }
 
-// /// Receive a tx output with the given value in the latest block
-// pub fn receive_output_in_latest_block(wallet: &mut Wallet, value: Amount) -> OutPoint {
-//     let latest_cp = wallet.latest_checkpoint();
-//     let height = latest_cp.height();
-//     assert!(height > 0, "cannot receive tx into genesis block");
-//     receive_output(
-//         wallet,
-//         value,
-//         ConfirmationBlockTime {
-//             block_id: latest_cp.block_id(),
-//             confirmation_time: 0,
-//         },
-//     )
-// }
+ /// Receive a tx output with the given value in the latest block
+ pub fn receive_output_in_latest_block<K>(wallet: &mut Wallet<K>, value: Amount, keychain: K) -> OutPoint
+ where K: Ord + Clone + fmt::Debug {
+     let latest_cp = wallet.latest_checkpoint();
+     let height = latest_cp.height();
+     assert!(height > 0, "cannot receive tx into genesis block");
+     receive_output(
+         wallet,
+         value,
+         ConfirmationBlockTime {
+             block_id: latest_cp.block_id(),
+             confirmation_time: 0,
+         },
+         keychain,
+     )
+ }
 
-// /// Receive a tx output with the given value and chain position
-// pub fn receive_output(
-//     wallet: &mut Wallet,
-//     value: Amount,
-//     receive_to: impl Into<ReceiveTo>,
-// ) -> OutPoint {
-//     let addr = wallet.next_unused_address(KeychainKind::External).address;
-//     receive_output_to_address(wallet, addr, value, receive_to)
-// }
+ /// Receive a tx output with the given value and chain position
+ pub fn receive_output<K>(
+     wallet: &mut Wallet<K>,
+     value: Amount,
+     receive_to: impl Into<ReceiveTo>,
+     keychain: K,
+ ) -> OutPoint
+ where K: Ord + Clone + fmt::Debug {
+     let addr = wallet.next_unused_address(keychain).expect("keychain should exist").address;
+     receive_output_to_address(wallet, addr, value, receive_to)
+ }
 
-// /// Receive a tx output to an address with the given value and chain position
-// pub fn receive_output_to_address(
-//     wallet: &mut Wallet,
-//     addr: Address,
-//     value: Amount,
-//     receive_to: impl Into<ReceiveTo>,
-// ) -> OutPoint {
-//     let tx = Transaction {
-//         version: transaction::Version::ONE,
-//         lock_time: absolute::LockTime::ZERO,
-//         input: vec![],
-//         output: vec![TxOut {
-//             script_pubkey: addr.script_pubkey(),
-//             value,
-//         }],
-//     };
+ /// Receive a tx output to an address with the given value and chain position
+ pub fn receive_output_to_address<K>(
+     wallet: &mut Wallet<K>,
+     addr: Address,
+     value: Amount,
+     receive_to: impl Into<ReceiveTo>,
+ ) -> OutPoint
+ where K: Ord + Clone + fmt::Debug {
+     let tx = Transaction {
+         version: transaction::Version::ONE,
+         lock_time: absolute::LockTime::ZERO,
+         input: vec![],
+         output: vec![TxOut {
+             script_pubkey: addr.script_pubkey(),
+             value,
+         }],
+     };
 
-//     let txid = tx.compute_txid();
-//     insert_tx(wallet, tx);
+     let txid = tx.compute_txid();
+     insert_tx(wallet, tx);
 
-//     match receive_to.into() {
-//         ReceiveTo::Block(anchor) => insert_anchor(wallet, txid, anchor),
-//         ReceiveTo::Mempool(last_seen) => insert_seen_at(wallet, txid, last_seen),
-//     }
+     match receive_to.into() {
+         ReceiveTo::Block(anchor) => insert_anchor(wallet, txid, anchor),
+         ReceiveTo::Mempool(last_seen) => insert_seen_at(wallet, txid, last_seen),
+     }
 
-//     OutPoint { txid, vout: 0 }
-// }
+     OutPoint { txid, vout: 0 }
+ }
 
 /// Insert a checkpoint into the wallet. This can be used to extend the wallet's local chain
 /// or to insert a block that did not exist previously. Note that if replacing a block with
@@ -356,14 +361,15 @@ pub fn insert_anchor<K: Ord + fmt::Debug + Clone>(
         .expect("failed to apply update");
 }
 
-// /// Marks the given `txid` seen as unconfirmed at `seen_at`
-// pub fn insert_seen_at(wallet: &mut Wallet, txid: Txid, seen_at: u64) {
-//     let mut tx_update = TxUpdate::default();
-//     tx_update.seen_ats = [(txid, seen_at)].into();
-//     wallet
-//         .apply_update(Update {
-//             tx_update,
-//             ..Default::default()
-//         })
-//         .expect("failed to apply update");
-// }
+ /// Marks the given `txid` seen as unconfirmed at `seen_at`
+ pub fn insert_seen_at<K>(wallet: &mut Wallet<K>, txid: Txid, seen_at: u64)
+ where K: Ord + Clone + fmt::Debug {
+     let mut tx_update = TxUpdate::default();
+     tx_update.seen_ats = [(txid, seen_at)].into();
+     wallet
+         .apply_update(Update {
+             tx_update,
+             ..Default::default()
+         })
+         .expect("failed to apply update");
+ }

@@ -765,6 +765,53 @@ where
     pub fn take_staged(&mut self) -> Option<ChangeSet<K>> {
         self.stage.take()
     }
+
+
+     /// List the locked outpoints.
+     pub fn list_locked_outpoints(&self) -> impl Iterator<Item = OutPoint> + '_ {
+         self.locked_outpoints.iter().copied()
+     }
+
+     /// List unspent outpoints that are currently locked.
+     pub fn list_locked_unspent(&self) -> impl Iterator<Item = OutPoint> + '_ {
+         self.list_unspent()
+             .filter(|output| self.is_outpoint_locked(output.outpoint))
+             .map(|output| output.outpoint)
+     }
+
+     /// Whether the `outpoint` is locked. See [`Wallet::lock_outpoint`] for more.
+     pub fn is_outpoint_locked(&self, outpoint: OutPoint) -> bool {
+         self.locked_outpoints.contains(&outpoint)
+     }
+
+     /// Lock a wallet output identified by the given `outpoint`.
+     ///
+     /// A locked UTXO will not be selected as an input to fund a transaction. This is useful
+     /// for excluding or reserving candidate inputs during transaction creation.
+     ///
+     /// **You must persist the staged change for the lock status to be persistent**. To unlock a
+     /// previously locked outpoint, see [`Wallet::unlock_outpoint`].
+     pub fn lock_outpoint(&mut self, outpoint: OutPoint) {
+         if self.locked_outpoints.insert(outpoint) {
+             let changeset = locked_outpoints::ChangeSet {
+                 outpoints: [(outpoint, true)].into(),
+             };
+             self.stage.merge(changeset.into());
+         }
+     }
+
+     /// Unlock the wallet output of the specified `outpoint`.
+     ///
+     /// **You must persist the staged change for the lock status to be persistent**.
+     pub fn unlock_outpoint(&mut self, outpoint: OutPoint) {
+         if self.locked_outpoints.remove(&outpoint) {
+             let changeset = locked_outpoints::ChangeSet {
+                 outpoints: [(outpoint, false)].into(),
+             };
+             self.stage.merge(changeset.into());
+         }
+     }
+
 }
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
@@ -2552,51 +2599,6 @@ where
 //         &self.chain
 //     }
 
-
-//     /// List the locked outpoints.
-//     pub fn list_locked_outpoints(&self) -> impl Iterator<Item = OutPoint> + '_ {
-//         self.locked_outpoints.iter().copied()
-//     }
-
-//     /// List unspent outpoints that are currently locked.
-//     pub fn list_locked_unspent(&self) -> impl Iterator<Item = OutPoint> + '_ {
-//         self.list_unspent()
-//             .filter(|output| self.is_outpoint_locked(output.outpoint))
-//             .map(|output| output.outpoint)
-//     }
-
-//     /// Whether the `outpoint` is locked. See [`Wallet::lock_outpoint`] for more.
-//     pub fn is_outpoint_locked(&self, outpoint: OutPoint) -> bool {
-//         self.locked_outpoints.contains(&outpoint)
-//     }
-
-//     /// Lock a wallet output identified by the given `outpoint`.
-//     ///
-//     /// A locked UTXO will not be selected as an input to fund a transaction. This is useful
-//     /// for excluding or reserving candidate inputs during transaction creation.
-//     ///
-//     /// **You must persist the staged change for the lock status to be persistent**. To unlock a
-//     /// previously locked outpoint, see [`Wallet::unlock_outpoint`].
-//     pub fn lock_outpoint(&mut self, outpoint: OutPoint) {
-//         if self.locked_outpoints.insert(outpoint) {
-//             let changeset = locked_outpoints::ChangeSet {
-//                 outpoints: [(outpoint, true)].into(),
-//             };
-//             self.stage.merge(changeset.into());
-//         }
-//     }
-
-//     /// Unlock the wallet output of the specified `outpoint`.
-//     ///
-//     /// **You must persist the staged change for the lock status to be persistent**.
-//     pub fn unlock_outpoint(&mut self, outpoint: OutPoint) {
-//         if self.locked_outpoints.remove(&outpoint) {
-//             let changeset = locked_outpoints::ChangeSet {
-//                 outpoints: [(outpoint, false)].into(),
-//             };
-//             self.stage.merge(changeset.into());
-//         }
-//     }
 
 
 //     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
