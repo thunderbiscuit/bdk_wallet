@@ -436,6 +436,12 @@ where
         })
     }
 
+    /// The derivation index of this wallet. It will return `None` if it has not derived any
+    /// addresses. Otherwise, it will return the index of the highest address it has derived.
+    pub fn derivation_index(&self, keychain: K) -> Option<u32> {
+        self.index().last_revealed_index(keychain)
+    }
+
     /// Construct a [`Wallet`] from a [`ChangeSet`]
     pub fn from_changeset(
         changeset: ChangeSet<K>,
