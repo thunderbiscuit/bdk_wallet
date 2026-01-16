@@ -1040,411 +1040,334 @@ where
     }
 }
 
+impl<K> Wallet<K>
+where
+    K: Ord + Clone + Debug,
+{
+    /// Get all the checkpoints the wallet is currently storing indexed by height.
+    pub fn checkpoints(&self) -> CheckPointIter {
+        self.chain.iter_checkpoints()
+    }
+
+    /// Return whether or not a `script` is part of this wallet (either internal or external)
+    pub fn is_mine(&self, script: ScriptBuf) -> bool {
+        self.tx_graph.index.index_of_spk(script).is_some()
+    }
+
+    /// Finds how the wallet derived the script pubkey `spk`.
+    ///
+    /// Will only return `Some(_)` if the wallet has given out the spk.
+    pub fn derivation_of_spk(&self, spk: ScriptBuf) -> Option<(K, u32)> {
+        self.tx_graph.index.index_of_spk(spk).cloned()
+    }
+
+    /// Calculate the fee of a given transaction.
+    ///
+    /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
+    /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    ///
+    /// Note `tx` does not have to be in the graph for this to work.
+    ///
+    /// [`insert_txout`]: Self::insert_txout
+    pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
+        self.tx_graph.graph().calculate_fee(tx)
+    }
+
+    /// Calculate the [`FeeRate`] for a given transaction.
+    ///
+    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
+    /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    ///
+    /// Note `tx` does not have to be in the graph for this to work.
+    ///
+    /// [`insert_txout`]: Self::insert_txout
+    pub fn calculate_fee_rate(&self, tx: &Transaction) -> Result<FeeRate, CalculateFeeError> {
+        self.calculate_fee(tx).map(|fee| fee / tx.weight())
+    }
+
+    /// Compute the `tx`'s sent and received [`Amount`]s.
+    ///
+    /// This method returns a tuple `(sent, received)`. Sent is the sum of the txin amounts
+    /// that spend from previous txouts tracked by this wallet. Received is the summation
+    /// of this tx's outputs that send to script pubkeys tracked by this wallet.
+    pub fn sent_and_received(&self, tx: &Transaction) -> (Amount, Amount) {
+        self.tx_graph.index.sent_and_received(tx, ..)
+    }
+
+    /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
+    ///
+    /// `WalletTx` contains the full transaction alongside meta-data such as:
+    /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that
+    ///   exist in the best chain.
+    /// * The [`ChainPosition`] of the transaction in the best chain - whether the transaction is
+    ///   confirmed or unconfirmed. If the transaction is confirmed, the anchor which proves the
+    ///   confirmation is provided. If the transaction is unconfirmed, the unix timestamp of when
+    ///   the transaction was last seen in the mempool is provided.
+    ///
+    /// [`Anchor`]: bdk_chain::Anchor
+    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
+        let graph = self.tx_graph.graph();
+        graph
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .find(|tx| tx.tx_node.txid == txid)
+    }
+
+    /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
+    /// wallet's database.
+    pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput<K>> {
+        let ((keychain, index), _) = self.tx_graph.index.txout(op)?;
+        self.tx_graph
+            .graph()
+            .filter_chain_unspents(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+                core::iter::once(((), op)),
+            )
+            .map(|(_, full_txo)| new_local_utxo(keychain.clone(), index, full_txo))
+            .next()
+    }
+
+    /// Inserts a [`TxOut`] at [`OutPoint`] into the wallet's transaction graph.
+    ///
+    /// This is used for providing a previous output's value so that we can use [`calculate_fee`]
+    /// or [`calculate_fee_rate`] on a given transaction. Outputs inserted with this method will
+    /// not be returned in [`list_unspent`] or [`list_output`].
+    ///
+    /// **WARNINGS:** This should only be used to add `TxOut`s that the wallet does not own. Only
+    /// insert `TxOut`s that you trust the values for!
+    ///
+    /// You must persist the changes resulting from one or more calls to this method if you need
+    /// the inserted `TxOut` data to be reloaded after closing the wallet.
+    /// See [`Wallet::reveal_next_address`].
+    ///
+    /// [`calculate_fee`]: Self::calculate_fee
+    /// [`calculate_fee_rate`]: Self::calculate_fee_rate
+    /// [`list_unspent`]: Self::list_unspent
+    /// [`list_output`]: Self::list_output
+    pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
+        let additions = self.tx_graph.insert_txout(outpoint, txout);
+        self.stage.merge(additions.into());
+    }
+
+    /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
+    ///
+    /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
+    pub fn list_output(&self) -> impl Iterator<Item = LocalOutput<K>> + '_ {
+        self.tx_graph
+            .graph()
+            .filter_chain_txouts(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+                self.tx_graph.index.outpoints().iter().cloned(),
+            )
+            .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
+    }
+
+    /// Marks an address used of the given `keychain` at `index`.
+    ///
+    /// Returns whether the given index was present and then removed from the unused set.
+    pub fn mark_used(&mut self, keychain: K, index: u32) -> bool {
+        self.tx_graph.index.mark_used(keychain, index)
+    }
+
+    /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
+    /// back into the unused set.
+    ///
+    /// Since this is only a superficial marker, it will have no effect if the address at the
+    /// given `index` was actually used, i.e. the wallet has previously indexed a tx output for
+    /// that address.
+    ///
+    /// [`mark_used`]: Self::mark_used
+    pub fn unmark_used(&mut self, keychain: K, index: u32) -> bool {
+        self.tx_graph.index.unmark_used(keychain, index)
+    }
+
+    /// Array of relevant and canonical transactions in the wallet sorted with a comparator
+    /// function.
+    ///
+    /// This is a helper method equivalent to collecting the result of [`Wallet::transactions`]
+    /// into a [`Vec`] and then sorting it.
+    pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx<'_>>
+    where
+        F: FnMut(&WalletTx, &WalletTx) -> core::cmp::Ordering,
+    {
+        let mut txs: Vec<WalletTx> = self.transactions().collect();
+        txs.sort_unstable_by(compare);
+        txs
+    }
+
+    /// Cancels an unconfirmed transaction by unmarking the outputs it consumes.
+    ///
+    /// Note: `unmark_used` will **not** make something unused if it has actually been used
+    /// by a tx in the tracker. It only removes the superficial marking.
+    pub fn cancel_tx(&mut self, tx: &Transaction) {
+        let txout_index = &mut self.tx_graph.index;
+        for txout in &tx.output {
+            if let Some((keychain, index)) = txout_index.index_of_spk(txout.script_pubkey.clone()) {
+                txout_index.unmark_used(keychain.clone(), *index);
+            }
+        }
+    }
+
+    /// List addresses that are revealed but unused.
+    ///
+    /// Note if the returned iterator is empty you can reveal more addresses
+    /// by using [`reveal_next_address`](Self::reveal_next_address) or
+    /// [`reveal_addresses_to`](Self::reveal_addresses_to).
+    pub fn list_unused_addresses(
+        &self,
+        keychain: K,
+    ) -> impl DoubleEndedIterator<Item = AddressInfo<K>> + '_ {
+        let network = self.keyring.network();
+        self.tx_graph
+            .index
+            .unused_keychain_spks(keychain.clone())
+            .map(move |(index, spk)| AddressInfo {
+                index,
+                address: Address::from_script(spk.as_script(), network)
+                    .expect("must have address form"),
+                keychain: keychain.clone(),
+            })
+    }
+
+    /// Peek an address of the given `keychain` at `index` without revealing it.
+    ///
+    /// For non-wildcard descriptors this returns the same address at every provided index.
+    ///
+    /// # Panics
+    ///
+    /// This panics when the caller requests for an address of derivation index greater than the
+    /// [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki) max index.
+    pub fn peek_address(&self, keychain: K, mut index: u32) -> Option<AddressInfo<K>> {
+        let mut spk_iter = self.tx_graph.index.unbounded_spk_iter(keychain.clone())?;
+        if !spk_iter.descriptor().has_wildcard() {
+            index = 0;
+        }
+        let (index, spk) = spk_iter
+            .nth(index as usize)
+            .expect("derivation index is out of bounds");
+
+        Some(AddressInfo {
+            index,
+            address: Address::from_script(&spk, self.keyring.network())
+                .expect("must have address form"),
+            keychain,
+        })
+    }
+
+    /// Reveal addresses up to and including the target `index` and return an iterator
+    /// of newly revealed addresses.
+    ///
+    /// If the target `index` is unreachable, we make a best effort to reveal up to the last
+    /// possible index. If all addresses up to the given `index` are already revealed, then
+    /// no new addresses are returned.
+    ///
+    /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
+    /// more calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
+    pub fn reveal_addresses_to(
+        &mut self,
+        keychain: K,
+        index: u32,
+    ) -> Option<impl Iterator<Item = AddressInfo<K>> + '_> {
+        let network = self.keyring.network();
+        let (spks, index_changeset) = self.tx_graph.index.reveal_to_target(keychain.clone(), index)?;
+
+        self.stage.merge(index_changeset.into());
+
+        Some(spks.into_iter().map(move |(index, spk)| AddressInfo {
+            index,
+            address: Address::from_script(&spk, network).expect("must have address form"),
+            keychain: keychain.clone(),
+        }))
+    }
+
+    /// Get unbounded script pubkey iterators for all keychains.
+    ///
+    /// This is intended to be used when doing a full scan of your addresses (e.g. after
+    /// restoring from seed words). You pass the `BTreeMap` of iterators to a blockchain data
+    /// source (e.g. electrum server) which will go through each address until it reaches a
+    /// *stop gap*.
+    ///
+    /// Note carefully that iterators go over **all** script pubkeys on the keychains (not what
+    /// script pubkeys the wallet is storing internally).
+    pub fn all_unbounded_spk_iters(
+        &self,
+    ) -> BTreeMap<K, impl Iterator<Item = Indexed<ScriptBuf>> + Clone> {
+        self.tx_graph.index.all_unbounded_spk_iters()
+    }
+
+    /// Get an unbounded script pubkey iterator for the given `keychain`.
+    ///
+    /// See [`all_unbounded_spk_iters`] for more documentation
+    ///
+    /// [`all_unbounded_spk_iters`]: Self::all_unbounded_spk_iters
+    pub fn unbounded_spk_iter(
+        &self,
+        keychain: K,
+    ) -> Option<impl Iterator<Item = Indexed<ScriptBuf>> + Clone> {
+        self.tx_graph.index.unbounded_spk_iter(keychain)
+    }
+
+    /// Get the [`TxDetails`] of a wallet transaction.
+    ///
+    /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions,
+    /// `None` is returned.
+    pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
+        let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
+
+        let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
+        let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
+        let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
+        let balance_delta: SignedAmount = self.tx_graph.index.net_value(&tx.tx_node.tx, ..);
+        let chain_position = tx.chain_position;
+
+        let tx_details: TxDetails = TxDetails {
+            txid,
+            received,
+            sent,
+            fee,
+            fee_rate,
+            balance_delta,
+            chain_position,
+            tx: tx.tx_node.tx,
+        };
+
+        Some(tx_details)
+    }
+
+    /// The index of the next address that you would get if you were to ask the wallet for a new
+    /// address.
+    pub fn next_derivation_index(&self, keychain: K) -> Option<u32> {
+        Some(self.tx_graph.index.next_index(keychain)?.0)
+    }
+
+    /// Get the public descriptor for a keychain.
+    ///
+    /// It's the "public" version of the wallet's descriptor, meaning a new descriptor that has
+    /// the same structure but with the all secret keys replaced by their corresponding public
+    /// key. This can be used to build a watch-only version of a wallet.
+    pub fn public_descriptor(&self, keychain: K) -> Option<&Descriptor<DescriptorPublicKey>> {
+        self.tx_graph.index.get_descriptor(keychain)
+    }
+
+    /// Get the checksum of the public descriptor for a keychain.
+    pub fn descriptor_checksum(&self, keychain: K) -> Option<String> {
+        self.public_descriptor(keychain).map(|desc| {
+            desc.to_string()
+                .split_once('#')
+                .map(|(_, checksum)| checksum.to_string())
+                .unwrap_or_default()
+        })
+    }
+}
+
 // impl Wallet {
-//     /// Peek an address of the given `keychain` at `index` without revealing it.
-//     ///
-//     /// For non-wildcard descriptors this returns the same address at every provided index.
-//     ///
-//     /// # Panics
-//     ///
-//     /// This panics when the caller requests for an address of derivation index greater than the
-//     /// [BIP32](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki) max index.
-//     pub fn peek_address(&self, keychain: KeychainKind, mut index: u32) -> AddressInfo {
-//         let keychain = self.map_keychain(keychain);
-//         let mut spk_iter = self
-//             .indexed_graph
-//             .index
-//             .unbounded_spk_iter(keychain)
-//             .expect("keychain must exist");
-//         if !spk_iter.descriptor().has_wildcard() {
-//             index = 0;
-//         }
-//         let (index, spk) = spk_iter
-//             .nth(index as usize)
-//             .expect("derivation index is out of bounds");
-
-//         AddressInfo {
-//             index,
-//             address: Address::from_script(&spk, self.network).expect("must have address form"),
-//             keychain,
-//         }
-//     }
-
-//     /// Reveal addresses up to and including the target `index` and return an iterator
-//     /// of newly revealed addresses.
-//     ///
-//     /// If the target `index` is unreachable, we make a best effort to reveal up to the last
-//     /// possible index. If all addresses up to the given `index` are already revealed, then
-//     /// no new addresses are returned.
-//     ///
-//     /// **WARNING**: To avoid address reuse you must persist the changes resulting from one or
-// more     /// calls to this method before closing the wallet. See [`Wallet::reveal_next_address`].
-//     pub fn reveal_addresses_to(
-//         &mut self,
-//         keychain: KeychainKind,
-//         index: u32,
-//     ) -> impl Iterator<Item = AddressInfo> + '_ {
-//         let keychain = self.map_keychain(keychain);
-//         let (spks, index_changeset) = self
-//             .indexed_graph
-//             .index
-//             .reveal_to_target(keychain, index)
-//             .expect("keychain must exist");
-
-//         self.stage.merge(index_changeset.into());
-
-//         spks.into_iter().map(move |(index, spk)| AddressInfo {
-//             index,
-//             address: Address::from_script(&spk, self.network).expect("must have address form"),
-//             keychain,
-//         })
-//     }
-
-//     /// Marks an address used of the given `keychain` at `index`.
-//     ///
-//     /// Returns whether the given index was present and then removed from the unused set.
-//     pub fn mark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-//         self.indexed_graph.index.mark_used(keychain, index)
-//     }
-
-//     /// Undoes the effect of [`mark_used`] and returns whether the `index` was inserted
-//     /// back into the unused set.
-//     ///
-//     /// Since this is only a superficial marker, it will have no effect if the address at the
-// given     /// `index` was actually used, i.e. the wallet has previously indexed a tx output for
-// the     /// derived spk.
-//     ///
-//     /// [`mark_used`]: Self::mark_used
-//     pub fn unmark_used(&mut self, keychain: KeychainKind, index: u32) -> bool {
-//         self.indexed_graph.index.unmark_used(keychain, index)
-//     }
-
-//     /// List addresses that are revealed but unused.
-//     ///
-//     /// Note if the returned iterator is empty you can reveal more addresses
-//     /// by using [`reveal_next_address`](Self::reveal_next_address) or
-//     /// [`reveal_addresses_to`](Self::reveal_addresses_to).
-//     pub fn list_unused_addresses(
-//         &self,
-//         keychain: KeychainKind,
-//     ) -> impl DoubleEndedIterator<Item = AddressInfo> + '_ {
-//         self.indexed_graph
-//             .index
-//             .unused_keychain_spks(self.map_keychain(keychain))
-//             .map(move |(index, spk)| AddressInfo {
-//                 index,
-//                 address: Address::from_script(spk.as_script(), self.network)
-//                     .expect("must have address form"),
-//                 keychain,
-//             })
-//     }
-
-//     /// Return whether or not a `script` is part of this wallet (either internal or external)
-//     pub fn is_mine(&self, script: ScriptBuf) -> bool {
-//         self.indexed_graph.index.index_of_spk(script).is_some()
-//     }
-
-//     /// Finds how the wallet derived the script pubkey `spk`.
-//     ///
-//     /// Will only return `Some(_)` if the wallet has given out the spk.
-//     pub fn derivation_of_spk(&self, spk: ScriptBuf) -> Option<(KeychainKind, u32)> {
-//         self.indexed_graph.index.index_of_spk(spk).cloned()
-//     }
-//     /// Get the [`TxDetails`] of a wallet transaction.
-//     ///
-//     /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions,
-// `None`     /// is returned.
-//     pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
-//         let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
-
-//         let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
-//         let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
-//         let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
-//         let balance_delta: SignedAmount = self.indexed_graph.index.net_value(&tx.tx_node.tx, ..);
-//         let chain_position = tx.chain_position;
-
-//         let tx_details: TxDetails = TxDetails {
-//             txid,
-//             received,
-//             sent,
-//             fee,
-//             fee_rate,
-//             balance_delta,
-//             chain_position,
-//             tx: tx.tx_node.tx,
-//         };
-
-//         Some(tx_details)
-//     }
-
-//     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
-//     ///
-//     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
-//     pub fn list_output(&self) -> impl Iterator<Item = LocalOutput> + '_ {
-//         self.indexed_graph
-//             .graph()
-//             .filter_chain_txouts(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//                 self.indexed_graph.index.outpoints().iter().cloned(),
-//             )
-//             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
-//     }
-
-//     /// Get all the checkpoints the wallet is currently storing indexed by height.
-//     pub fn checkpoints(&self) -> CheckPointIter {
-//         self.chain.iter_checkpoints()
-//     }
-
-//     /// Get unbounded script pubkey iterators for both `Internal` and `External` keychains.
-//     ///
-//     /// This is intended to be used when doing a full scan of your addresses (e.g. after
-// restoring     /// from seed words). You pass the `BTreeMap` of iterators to a blockchain data
-// source (e.g.     /// electrum server) which will go through each address until it reaches a *stop
-// gap*.     ///
-//     /// Note carefully that iterators go over **all** script pubkeys on the keychains (not what
-//     /// script pubkeys the wallet is storing internally).
-//     pub fn all_unbounded_spk_iters(
-//         &self,
-//     ) -> BTreeMap<KeychainKind, impl Iterator<Item = Indexed<ScriptBuf>> + Clone> {
-//         self.indexed_graph.index.all_unbounded_spk_iters()
-//     }
-
-//     /// Get an unbounded script pubkey iterator for the given `keychain`.
-//     ///
-//     /// See [`all_unbounded_spk_iters`] for more documentation
-//     ///
-//     /// [`all_unbounded_spk_iters`]: Self::all_unbounded_spk_iters
-//     pub fn unbounded_spk_iter(
-//         &self,
-//         keychain: KeychainKind,
-//     ) -> impl Iterator<Item = Indexed<ScriptBuf>> + Clone {
-//         self.indexed_graph
-//             .index
-//             .unbounded_spk_iter(self.map_keychain(keychain))
-//             .expect("keychain must exist")
-//     }
-
-//     /// Returns the utxo owned by this wallet corresponding to `outpoint` if it exists in the
-//     /// wallet's database.
-//     pub fn get_utxo(&self, op: OutPoint) -> Option<LocalOutput> {
-//         let ((keychain, index), _) = self.indexed_graph.index.txout(op)?;
-//         self.indexed_graph
-//             .graph()
-//             .filter_chain_unspents(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//                 core::iter::once(((), op)),
-//             )
-//             .map(|(_, full_txo)| new_local_utxo(keychain, index, full_txo))
-//             .next()
-//     }
-
-//     /// Inserts a [`TxOut`] at [`OutPoint`] into the wallet's transaction graph.
-//     ///
-//     /// This is used for providing a previous output's value so that we can use [`calculate_fee`]
-//     /// or [`calculate_fee_rate`] on a given transaction. Outputs inserted with this method will
-//     /// not be returned in [`list_unspent`] or [`list_output`].
-//     ///
-//     /// **WARNINGS:** This should only be used to add `TxOut`s that the wallet does not own. Only
-//     /// insert `TxOut`s that you trust the values for!
-//     ///
-//     /// You must persist the changes resulting from one or more calls to this method if you need
-//     /// the inserted `TxOut` data to be reloaded after closing the wallet.
-//     /// See [`Wallet::reveal_next_address`].
-//     ///
-//     /// [`calculate_fee`]: Self::calculate_fee
-//     /// [`calculate_fee_rate`]: Self::calculate_fee_rate
-//     /// [`list_unspent`]: Self::list_unspent
-//     /// [`list_output`]: Self::list_output
-//     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
-//         let additions = self.indexed_graph.insert_txout(outpoint, txout);
-//         self.stage.merge(additions.into());
-//     }
-
-//     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
-//     /// transaction.
-//     ///
-//     /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
-//     /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
-//     ///
-//     /// Note `tx` does not have to be in the graph for this to work.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Txid;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let txid:Txid = todo!();
-//     /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     /// let fee = wallet.calculate_fee(&tx).expect("fee");
-//     /// ```
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Psbt;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let mut psbt: Psbt = todo!();
-//     /// let tx = &psbt.clone().extract_tx().expect("tx");
-//     /// let fee = wallet.calculate_fee(tx).expect("fee");
-//     /// ```
-//     /// [`insert_txout`]: Self::insert_txout
-//     pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
-//         self.indexed_graph.graph().calculate_fee(tx)
-//     }
-
-//     /// Calculate the [`FeeRate`] for a given transaction.
-//     ///
-//     /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
-//     /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
-//     ///
-//     /// Note `tx` does not have to be in the graph for this to work.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Txid;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let txid:Txid = todo!();
-//     /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     /// let fee_rate = wallet.calculate_fee_rate(&tx).expect("fee rate");
-//     /// ```
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Psbt;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let mut psbt: Psbt = todo!();
-//     /// let tx = &psbt.clone().extract_tx().expect("tx");
-//     /// let fee_rate = wallet.calculate_fee_rate(tx).expect("fee rate");
-//     /// ```
-//     /// [`insert_txout`]: Self::insert_txout
-//     pub fn calculate_fee_rate(&self, tx: &Transaction) -> Result<FeeRate, CalculateFeeError> {
-//         self.calculate_fee(tx).map(|fee| fee / tx.weight())
-//     }
-
-//     /// Compute the `tx`'s sent and received [`Amount`]s.
-//     ///
-//     /// This method returns a tuple `(sent, received)`. Sent is the sum of the txin amounts
-//     /// that spend from previous txouts tracked by this wallet. Received is the summation
-//     /// of this tx's outputs that send to script pubkeys tracked by this wallet.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Txid;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let txid:Txid = todo!();
-//     /// let tx = wallet.get_tx(txid).expect("tx exists").tx_node.tx;
-//     /// let (sent, received) = wallet.sent_and_received(&tx);
-//     /// ```
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Psbt;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let mut psbt: Psbt = todo!();
-//     /// let tx = &psbt.clone().extract_tx().expect("tx");
-//     /// let (sent, received) = wallet.sent_and_received(tx);
-//     /// ```
-//     pub fn sent_and_received(&self, tx: &Transaction) -> (Amount, Amount) {
-//         self.indexed_graph.index.sent_and_received(tx, ..)
-//     }
-
-//     /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
-//     ///
-//     /// `WalletTx` contains the full transaction alongside meta-data such as:
-//     /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that
-// exist     ///   in the best chain.
-//     /// * The [`ChainPosition`] of the transaction in the best chain - whether the transaction is
-//     ///   confirmed or unconfirmed. If the transaction is confirmed, the anchor which proves the
-//     ///   confirmation is provided. If the transaction is unconfirmed, the unix timestamp of when
-//     ///   the transaction was last seen in the mempool is provided.
-//     ///
-//     /// ```rust, no_run
-//     /// use bdk_chain::Anchor;
-//     /// use bdk_wallet::{chain::ChainPosition, Wallet};
-//     /// # let wallet: Wallet = todo!();
-//     /// # let my_txid: bitcoin::Txid = todo!();
-//     ///
-//     /// let wallet_tx = wallet.get_tx(my_txid).expect("panic if tx does not exist");
-//     ///
-//     /// // get reference to full transaction
-//     /// println!("my tx: {:#?}", wallet_tx.tx_node.tx);
-//     ///
-//     /// // list all transaction anchors
-//     /// for anchor in wallet_tx.tx_node.anchors {
-//     ///     println!(
-//     ///         "tx is anchored by block of hash {}",
-//     ///         anchor.anchor_block().hash
-//     ///     );
-//     /// }
-//     ///
-//     /// // get confirmation status of transaction
-//     /// match wallet_tx.chain_position {
-//     ///     ChainPosition::Confirmed {
-//     ///         anchor,
-//     ///         transitively: None,
-//     ///     } => println!(
-//     ///         "tx is confirmed at height {}, we know this since {}:{} is in the best chain",
-//     ///         anchor.block_id.height, anchor.block_id.height, anchor.block_id.hash,
-//     ///     ),
-//     ///     ChainPosition::Confirmed {
-//     ///         anchor,
-//     ///         transitively: Some(_),
-//     ///     } => println!(
-//     ///         "tx is an ancestor of a tx anchored in {}:{}",
-//     ///         anchor.block_id.height, anchor.block_id.hash,
-//     ///     ),
-//     ///     ChainPosition::Unconfirmed { first_seen, last_seen } => println!(
-//     ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not
-// anchored in the best chain",     ///         first_seen, last_seen
-//     ///     ),
-//     /// }
-//     /// ```
-//     ///
-//     /// [`Anchor`]: bdk_chain::Anchor
-//     pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
-//         let graph = self.indexed_graph.graph();
-//         graph
-//             .list_canonical_txs(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//             )
-//             .find(|tx| tx.tx_node.txid == txid)
-//     }
-
-//     /// Array of relevant and canonical transactions in the wallet sorted with a comparator
-//     /// function.
-//     ///
-//     /// This is a helper method equivalent to collecting the result of [`Wallet::transactions`]
-//     /// into a [`Vec`] and then sorting it.
-//     ///
-//     /// # Example
-//     ///
-//     /// ```rust,no_run
-//     /// # use bdk_wallet::{LoadParams, Wallet, WalletTx};
-//     /// # let mut wallet:Wallet = todo!();
-//     /// // Transactions by chain position: first unconfirmed then descending by confirmed height.
-//     /// let sorted_txs: Vec<WalletTx> =
-//     ///     wallet.transactions_sort_by(|tx1, tx2| tx2.chain_position.cmp(&tx1.chain_position));
-//     /// # Ok::<(), anyhow::Error>(())
-//     /// ```
-//     pub fn transactions_sort_by<F>(&self, compare: F) -> Vec<WalletTx<'_>>
-//     where
-//         F: FnMut(&WalletTx, &WalletTx) -> Ordering,
-//     {
-//         let mut txs: Vec<WalletTx> = self.transactions().collect();
-//         txs.sort_unstable_by(compare);
-//         txs
-//     }
-
 //     /// Return the balance, separated into available, trusted-pending, untrusted-pending, and
 //     /// immature values.
 //     pub fn balance(&self) -> Balance {
@@ -2156,18 +2079,6 @@ where
 //         )
 //     }
 
-//     /// Returns the descriptor used to create addresses for a particular `keychain`.
-//     ///
-//     /// It's the "public" version of the wallet's descriptor, meaning a new descriptor that has
-//     /// the same structure but with the all secret keys replaced by their corresponding public
-// key.     /// This can be used to build a watch-only version of a wallet.
-//     pub fn public_descriptor(&self, keychain: KeychainKind) -> &ExtendedDescriptor {
-//         self.indexed_graph
-//             .index
-//             .get_descriptor(self.map_keychain(keychain))
-//             .expect("keychain must exist")
-//     }
-
 //     /// Finalize a PSBT, i.e., for each input determine if sufficient data is available to pass
 //     /// validation and construct the respective `scriptSig` or `scriptWitness`. Please refer to
 //     /// [BIP174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki#Input_Finalizer),
@@ -2295,31 +2206,6 @@ where
 //     /// addresses. Otherwise, it will return the index of the highest address it has derived.
 //     pub fn derivation_index(&self, keychain: KeychainKind) -> Option<u32> {
 //         self.indexed_graph.index.last_revealed_index(keychain)
-//     }
-
-// /// The index of the next address that you would get if you were to ask the wallet for a new
-// /// address.
-// pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
-//     self.indexed_graph
-//         .index
-//         .next_index(self.map_keychain(keychain))
-//         .expect("keychain must exist")
-//         .0
-// }
-
-//     /// Informs the wallet that you no longer intend to broadcast a tx that was built from it.
-//     ///
-//     /// This frees up the change address used when creating the tx for use in future
-// transactions.     // TODO: Make this free up reserved utxos when that's implemented
-//     pub fn cancel_tx(&mut self, tx: &Transaction) {
-//         let txout_index = &mut self.indexed_graph.index;
-//         for txout in &tx.output {
-//             if let Some((keychain, index)) =
-// txout_index.index_of_spk(txout.script_pubkey.clone()) {                 // NOTE: unmark_used will
-// **not** make something unused if it has actually been used                 // by a tx in the
-// tracker. It only removes the superficial marking.
-// txout_index.unmark_used(*keychain, *index);             }
-//         }
 //     }
 
 //     fn get_descriptor_for_txout(&self, txout: &TxOut) -> Option<DerivedDescriptor> {
@@ -2548,18 +2434,6 @@ where
 
 //         Ok(())
 //     }
-
-// /// Return the checksum of the public descriptor associated to the `keychain`.
-// ///
-// /// Internally calls [`Self::public_descriptor`] to fetch the right descriptor.
-// pub fn descriptor_checksum(&self, keychain: KeychainKind) -> String {
-//     self.public_descriptor(keychain)
-//         .to_string()
-//         .split_once('#')
-//         .unwrap()
-//         .1
-//         .to_string()
-// }
 
 //     /// Applies an update to the wallet and stages the changes (but does not persist them).
 //     ///
