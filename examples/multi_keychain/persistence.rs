@@ -95,8 +95,7 @@ fn main() {
     {
         let mut conn = rusqlite::Connection::open(db_path).unwrap();
 
-        let params = LoadParams::<AccountType>::new()
-            .check_network(Network::Regtest);
+        let params = LoadParams::<AccountType>::new().check_network(Network::Regtest);
 
         match params.load_wallet(&mut conn).unwrap() {
             Some(wallet) => {

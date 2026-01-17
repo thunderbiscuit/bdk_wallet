@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use bdk_wallet::chain::DescriptorExt;
 use bdk_wallet::descriptor::DescriptorError;
 use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::KeychainKind;
+use bdk_wallet::{chain::DescriptorExt, keyring::KeyRingError};
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
 use miniscript::{Descriptor, DescriptorPublicKey};
@@ -61,10 +61,20 @@ fn test_8_keychains_keyring() {
 #[test]
 fn err_on_hardened_derivation_path() {
     let err =  KeyRing::new(Network::Regtest, KeychainKind::External, "tr(tpubD6NzVbkrYhZ4WyC5VZLuSJQ14uwfUbus7oAFurAFkZA5N3groeQqtW65m8pG1TT1arPpfWu9RbBsc5rSBncrX2d84BAwJJHQfaRjnMCQwuT/86h/1h/0h/0/*)").err();
-    assert_eq!(err, Some(DescriptorError::HardenedDerivationXpub));
+    assert_eq!(
+        err,
+        Some(KeyRingError::Descriptor(
+            DescriptorError::HardenedDerivationXpub
+        ))
+    );
     let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, DESC_1).unwrap();
     let res = keyring.add_descriptor(KeychainKind::Internal,"tr([738b4dbd/86h/1h/0h]tpubDDQsJyQKuP6jCCSZ75Y8zpBAnXsvAN6BWpp6ZoczfxKBDBWnY8XGbC7AMMSyXAcQPNgppkCBmv3hkCLZSaQ4VvSTGsstuTrXuDadMaB7E45/0'/*)", false).err();
-    assert_eq!(res, Some(DescriptorError::HardenedDerivationXpub));
+    assert_eq!(
+        res,
+        Some(KeyRingError::Descriptor(
+            DescriptorError::HardenedDerivationXpub
+        ))
+    );
 }
 
 #[test]
@@ -72,36 +82,35 @@ fn err_on_multipath() {
     let err =  KeyRing::new(Network::Regtest, KeychainKind::External, "pkh(tpubD6NzVbkrYhZ4WaWSyoBvQwbpLkojyoTZPRsgXELWz3Popb3qkjcJyJUGLnL4qHHoQvao8ESaAstxYSnhyswJ76uZPStJRJCTKvosUCJZL5B/1/1/<0;1>)").err();
     assert_eq!(
         err,
-        Some(DescriptorError::Miniscript(
+        Some(KeyRingError::Descriptor(DescriptorError::Miniscript(
             miniscript::Error::BadDescriptor(
                 "`check_wallet_descriptor` must not contain multipath keys".to_string(),
             )
-        ))
+        )))
     );
     let mut keyring = KeyRing::new(Network::Regtest, KeychainKind::External, DESC_1).unwrap();
     let res = keyring.add_descriptor(KeychainKind::Internal, "tr(tpubD6NzVbkrYhZ4WyC5VZLuSJQ14uwfUbus7oAFurAFkZA5N3groeQqtW65m8pG1TT1arPpfWu9RbBsc5rSBncrX2d84BAwJJHQfaRjnMCQwuT/86/1/0/<0;1>/*)" , false).err();
     assert_eq!(
         res,
-        Some(DescriptorError::Miniscript(
+        Some(KeyRingError::Descriptor(DescriptorError::Miniscript(
             miniscript::Error::BadDescriptor(
                 "`check_wallet_descriptor` must not contain multipath keys".to_string(),
             )
-        ))
+        )))
     );
 }
 
 #[test]
 fn duplicate_desc_keychain() {
     let desc1 = get_descriptor(DESC_1);
-    let mut keyring = KeyRing::new(Network::Regtest, desc1.descriptor_id(), desc1.clone()).unwrap();
+    let did1 = desc1.descriptor_id();
+    let mut keyring = KeyRing::new(Network::Regtest, did1, desc1.clone()).unwrap();
     let desc2 = get_descriptor("tr(tprv8ZgxMBicQKsPdWAHbugK2tjtVtRjKGixYVZUdL7xLHMgXZS6BFbFi1UDb1CHT25Z5PU1F9j7wGxwUiRhqz9E3nZRztikGUV6HoRDYcqPhM4/86'/1'/0'/1/*)");
     let res1 = keyring
         .add_descriptor(desc2.descriptor_id(), desc1.clone(), false)
         .err();
-    assert_eq!(res1, Some(DescriptorError::DescAlreadyExists));
+    assert_eq!(res1, Some(KeyRingError::DescAlreadyExists(desc1.clone())));
 
-    let res2 = keyring
-        .add_descriptor(desc1.descriptor_id(), desc2, false)
-        .err();
-    assert_eq!(res2, Some(DescriptorError::KeychainAlreadyExists));
+    let res2 = keyring.add_descriptor(did1, desc2, false).err();
+    assert_eq!(res2, Some(KeyRingError::KeychainAlreadyExists(did1)));
 }

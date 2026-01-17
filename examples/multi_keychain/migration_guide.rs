@@ -41,32 +41,37 @@ fn main() {
 
     println!("NEW APIs");
     // Create a traditional 2-keychain wallet using KeychainKind
-    let mut keyring: KeyRing<KeychainKind> = KeyRing::new(
-        Network::Signet,
-        KeychainKind::External,
-        EXTERNAL_DESC,
-    )
-    .unwrap();
+    let mut keyring: KeyRing<KeychainKind> =
+        KeyRing::new(Network::Signet, KeychainKind::External, EXTERNAL_DESC).unwrap();
 
     keyring
         .add_descriptor(KeychainKind::Internal, INTERNAL_DESC, false)
         .unwrap();
 
-    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
     // Generate addresses just like before
     println!("Generating addresses:");
     let receive = wallet.reveal_next_address(KeychainKind::External).unwrap();
-    println!("  Receive (External): {} at index {}", receive.address, receive.index);
+    println!(
+        "  Receive (External): {} at index {}",
+        receive.address, receive.index
+    );
 
     let change = wallet.reveal_next_address(KeychainKind::Internal).unwrap();
-    println!("  Change  (Internal): {} at index {}\n", change.address, change.index);
+    println!(
+        "  Change  (Internal): {} at index {}\n",
+        change.address, change.index
+    );
 
     // The default keychain concept is new
     println!("NEW FEATURE: Default keychain");
     println!("  Default: {:?}", wallet.default_keychain());
     let default_addr = wallet.reveal_next_default_address();
-    println!("  Default address: {} (keychain: {:?})\n", default_addr.address, default_addr.keychain);
+    println!(
+        "  Default address: {} (keychain: {:?})\n",
+        default_addr.address, default_addr.keychain
+    );
 
     // Show that all the wallet operations work the same way
     println!("Standard operations work as expected:");
@@ -85,7 +90,9 @@ fn main() {
 
     println!("BENEFITS OF NEW API:");
     println!("  ✓ Not limited to 2 descriptors (External/Internal)");
-    println!("  ✓ Can use any type as keychain identifier (KeychainKind, String, custom enum, etc.)");
+    println!(
+        "  ✓ Can use any type as keychain identifier (KeychainKind, String, custom enum, etc.)"
+    );
     println!("  ✓ More explicit about which keychain you're using");
     println!("  ✓ Better separation of concerns (KeyRing vs Wallet)\n");
 

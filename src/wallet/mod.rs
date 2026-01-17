@@ -30,8 +30,8 @@ use core::{
 use bdk_chain::{
     indexed_tx_graph,
     indexer::keychain_txout::{
-        self, FullScanRequestBuilderExt, KeychainTxOutIndex, SyncRequestBuilderExt,
-        DEFAULT_LOOKAHEAD,
+        self, FullScanRequestBuilderExt, InsertDescriptorError, KeychainTxOutIndex,
+        SyncRequestBuilderExt, DEFAULT_LOOKAHEAD,
     },
     local_chain::{ApplyHeaderError, CannotConnectError, CheckPoint, CheckPointIter, LocalChain},
     spk_client::{
@@ -71,18 +71,10 @@ pub mod tx_builder;
 pub(crate) mod utils;
 
 use crate::descriptor::{
-    check_wallet_descriptor,
-    error::Error as DescriptorError,
-    // policy::BuildSatisfaction,
-    DerivedDescriptor,
-    DescriptorMeta,
-    ExtendedDescriptor,
-    // ExtractPolicy,
-    IntoWalletDescriptor,
-    // Policy,
-    XKeyUtils,
+    self, check_wallet_descriptor, DerivedDescriptor, DescriptorMeta, ExtendedDescriptor,
+    IntoWalletDescriptor, XKeyUtils,
 };
-use crate::keyring::KeyRing;
+use crate::keyring::{KeyRing, KeyRingError};
 use crate::psbt::PsbtUtils;
 use crate::types::*;
 use crate::wallet::{
@@ -173,17 +165,46 @@ impl<K> fmt::Display for AddressInfo<K> {
 pub enum LoadError<K> {
     /// Data loaded from persistence is missing genesis hash.
     MissingGenesis,
-    /// Data loaded has invalid [`KeyRing`].
-    Keyring(keyring::LoadError<K>),
-    /// Genesis hash is not as expected.
+    /// Data is missing the network.
+    MissingNetwork,
+    /// The default keychain is missing.
+    MissingDefaultKeychain,
+    /// The keychain is missing,
+    MissingKeychain(K),
+    /// There was a problem with the passed-in descriptor(s).
+    InvalidKeyRing(KeyRingError<K>),
+    /// Loaded `KeyRing` is empty.
+    EmptyKeyring,
+    /// Genesis hash does not match.
     GenesisMismatch {
         /// The genesis hash that is loaded.
         loaded: BlockHash,
         /// The expected genesis hash.
         expected: BlockHash,
     },
-    /// Loaded `KeyRing` is empty.
-    EmptyKeyring,
+    /// Network does not match.
+    NetworkMismatch {
+        /// The network that is loaded.
+        loaded: bitcoin::Network,
+        /// The expected network.
+        expected: bitcoin::Network,
+    },
+    /// Descriptor does not match for the `keychain`.
+    DescriptorMismatch {
+        /// Keychain identifying the descriptor
+        keychain: K,
+        /// The loaded descriptor
+        loaded: ExtendedDescriptor,
+        /// The expected descriptor
+        expected: ExtendedDescriptor,
+    },
+    /// The default keychain is not as expected
+    DefaultKeychainMismatch {
+        /// The loaded default keychain
+        loaded: K,
+        /// The expected default keychain
+        expected: K,
+    },
 }
 
 impl<K> fmt::Display for LoadError<K>
@@ -192,64 +213,30 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LoadError::Keyring(e) => e.fmt(f),
             LoadError::MissingGenesis => write!(f, "loaded data is missing genesis hash"),
+            LoadError::MissingNetwork => write!(f, "loaded data is missing the network"),
+            LoadError::MissingKeychain(keychain) => {
+                write!(f, "loaded data does not contain the keychain {keychain}")
+            }
+            LoadError::MissingDefaultKeychain => {
+                write!(f, "loaded data is missing the default keychain")
+            }
+            LoadError::InvalidKeyRing(err) => write!(f, "{err}"),
+            LoadError::EmptyKeyring => write!(f, "Loaded keyring is empty"),
             LoadError::GenesisMismatch { loaded, expected } => write!(
                 f,
                 "Genesis hash mismatch: loaded {loaded}, expected {expected}"
             ),
-            LoadError::EmptyKeyring => write!(f, "Loaded keyring is empty"),
-        }
-    }
-}
-
-#[cfg(feature = "std")]
-impl<K> std::error::Error for LoadError<K> where K: fmt::Display + fmt::Debug {}
-
-/// Represents a mismatch with what is loaded and what is expected.
-#[derive(Debug, PartialEq)]
-pub enum LoadMismatch<K> {
-    /// Network does not match.
-    Network {
-        /// The network that is loaded.
-        loaded: Network,
-        /// The expected network.
-        expected: Network,
-    },
-    /// Genesis hash does not match.
-    Genesis {
-        /// The genesis hash that is loaded.
-        loaded: BlockHash,
-        /// The expected genesis hash.
-        expected: BlockHash,
-    },
-    /// Descriptor's [`DescriptorId`](bdk_chain::DescriptorId) does not match.
-    Descriptor {
-        /// Keychain identifying the descriptor.
-        keychain: K,
-        /// The loaded descriptor.
-        loaded: Option<Box<ExtendedDescriptor>>,
-        /// The expected descriptor.
-        expected: Option<Box<ExtendedDescriptor>>,
-    },
-}
-
-impl<K> fmt::Display for LoadMismatch<K>
-where
-    K: fmt::Display,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoadMismatch::Network { loaded, expected } => {
+            LoadError::NetworkMismatch { loaded, expected } => {
                 write!(f, "Network mismatch: loaded {loaded}, expected {expected}")
             }
-            LoadMismatch::Genesis { loaded, expected } => {
+            LoadError::GenesisMismatch { loaded, expected } => {
                 write!(
                     f,
                     "Genesis hash mismatch: loaded {loaded}, expected {expected}"
                 )
             }
-            LoadMismatch::Descriptor {
+            LoadError::DescriptorMismatch {
                 keychain,
                 loaded,
                 expected,
@@ -257,24 +244,20 @@ where
                 write!(
                     f,
                     "Descriptor mismatch for {} keychain: loaded {}, expected {}",
-                    keychain,
-                    loaded
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string()),
-                    expected
-                        .as_ref()
-                        .map_or("None".to_string(), |d| d.to_string())
+                    keychain, loaded, expected,
                 )
             }
+            LoadError::DefaultKeychainMismatch { loaded, expected } => write!(
+                f,
+                "Default keychain mismatch: loaded {}, expected {}",
+                expected, loaded
+            ),
         }
     }
 }
 
-impl<K> From<crate::keyring::error::LoadError<K>> for LoadError<K> {
-    fn from(err: crate::keyring::error::LoadError<K>) -> Self {
-        LoadError::Keyring(err)
-    }
-}
+#[cfg(feature = "std")]
+impl<K> std::error::Error for LoadError<K> where K: fmt::Display + fmt::Debug {}
 
 /// A `CanonicalTx` managed by a `Wallet`.
 pub type WalletTx<'a> = CanonicalTx<'a, Arc<Transaction>, ConfirmationBlockTime>;
@@ -291,7 +274,7 @@ where
     /// Construct a new [`Wallet`] with the given `params`.
     ///
     /// The `genesis_hash` (if not specified) will be inferred from `keyring.network`.
-    pub fn create_with_params(mut params: CreateParams<K>) -> Self {
+    pub fn create_with_params(mut params: CreateParams<K>) -> Result<Self, KeyRingError<K>> {
         let network = params.keyring.network;
         let genesis_inferred = bitcoin::constants::genesis_block(network).block_hash();
 
@@ -303,8 +286,15 @@ where
         let descriptors = params.keyring.descriptors.clone();
         for (keychain, desc) in descriptors {
             let _inserted = index
-                .insert_descriptor(keychain, desc)
-                .expect("err: failed to insert descriptor");
+                .insert_descriptor(keychain.clone(), desc.clone())
+                .map_err(|e| match e {
+                    InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
+                        KeyRingError::DescAlreadyExists(desc)
+                    }
+                    InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
+                        KeyRingError::KeychainAlreadyExists(keychain)
+                    }
+                })?;
             assert!(_inserted);
         }
 
@@ -320,13 +310,13 @@ where
             locked_outpoints: locked_outpoints::ChangeSet::default(),
         };
 
-        Self {
+        Ok(Self {
             keyring: params.keyring,
             chain,
             tx_graph,
             stage,
             locked_outpoints,
-        }
+        })
     }
 
     /// Build [`Wallet`] by loading from persistence or [`ChangeSet`].
@@ -481,7 +471,7 @@ where
             params.lookahead,
             params.use_spk_cache,
         )
-        .map_err(keyring::LoadError::Descriptor)?;
+        .map_err(LoadError::InvalidKeyRing)?;
 
         let locked_outpoints = changeset.locked_outpoints.outpoints;
         let locked_outpoints = locked_outpoints
@@ -2634,7 +2624,7 @@ pub fn wallet_name_from_descriptor<T>(
     change_descriptor: Option<T>,
     network_kind: NetworkKind,
     secp: &SecpCtx,
-) -> Result<String, DescriptorError>
+) -> Result<String, crate::descriptor::error::Error>
 where
     T: IntoWalletDescriptor,
 {
@@ -2680,7 +2670,7 @@ fn make_indexed_graph<K>(
     descriptors: BTreeMap<K, ExtendedDescriptor>,
     lookahead: u32,
     use_spk_cache: bool,
-) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>, DescriptorError>
+) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>, KeyRingError<K>>
 where
     K: Ord + Clone + Debug,
 {
@@ -2689,21 +2679,23 @@ where
             tx_graph: tx_graph_changeset,
             indexer: indexer_changeset,
         },
-        |idx_cs| -> Result<KeychainTxOutIndex<K>, DescriptorError> {
+        |idx_cs| -> Result<KeychainTxOutIndex<K>, KeyRingError<K>> {
             let mut idx = KeychainTxOutIndex::from_changeset(lookahead, use_spk_cache, idx_cs);
 
             for (keychain, desc) in descriptors {
-                let _inserted = idx.insert_descriptor(keychain, desc).map_err(|e| {
-                    use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
-                    match e {
-                        InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
-                            DescriptorError::DescAlreadyExists
+                let _inserted = idx
+                    .insert_descriptor(keychain.clone(), desc.clone())
+                    .map_err(|e| {
+                        use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
+                        match e {
+                            InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
+                                KeyRingError::DescAlreadyExists(desc)
+                            }
+                            InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
+                                KeyRingError::KeychainAlreadyExists(keychain)
+                            }
                         }
-                        InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
-                            DescriptorError::KeychainAlreadyExists
-                        }
-                    }
-                })?;
+                    })?;
                 assert!(
                     _inserted,
                     "this must be the first time we are seeing this descriptor"
@@ -2812,7 +2804,9 @@ mod test {
 
     #[test]
     fn correct_address_is_revealed() {
-        let mut wallet = Wallet::create(test_keyring(DESCRIPTORS)).create_wallet_no_persist();
+        let mut wallet = Wallet::create(test_keyring(DESCRIPTORS))
+            .create_wallet_no_persist()
+            .unwrap();
         let addrinfo = wallet.reveal_next_default_address();
         assert_eq!(
             addrinfo.address.into_unchecked(),

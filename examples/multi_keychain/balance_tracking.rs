@@ -35,7 +35,7 @@ fn main() {
     .into();
 
     let keyring = KeyRing::new_with_descriptors(Network::Signet, descriptors, None).unwrap();
-    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
     println!("Created wallet with 3 keychains:\n");
 
@@ -48,13 +48,22 @@ fn main() {
     // Generate addresses for each keychain
     println!("\n2. Generating receive addresses:");
     let savings_addr = wallet.reveal_next_address(AccountType::Savings).unwrap();
-    println!("   Savings   (index {}): {}", savings_addr.index, savings_addr.address);
+    println!(
+        "   Savings   (index {}): {}",
+        savings_addr.index, savings_addr.address
+    );
 
     let spending_addr = wallet.reveal_next_address(AccountType::Spending).unwrap();
-    println!("   Spending  (index {}): {}", spending_addr.index, spending_addr.address);
+    println!(
+        "   Spending  (index {}): {}",
+        spending_addr.index, spending_addr.address
+    );
 
     let donations_addr = wallet.reveal_next_address(AccountType::Donations).unwrap();
-    println!("   Donations (index {}): {}\n", donations_addr.index, donations_addr.address);
+    println!(
+        "   Donations (index {}): {}\n",
+        donations_addr.index, donations_addr.address
+    );
 
     // Check overall balance
     println!("3. Current balances:");
@@ -78,7 +87,8 @@ fn main() {
     println!("   - Total: {} sats", spending_balance.total());
 
     // Balance for donations
-    let donations_balance = wallet.keychain_balance(AccountType::Donations..=AccountType::Donations);
+    let donations_balance =
+        wallet.keychain_balance(AccountType::Donations..=AccountType::Donations);
     println!("   Donations account:");
     println!("   - Total: {} sats\n", donations_balance.total());
 

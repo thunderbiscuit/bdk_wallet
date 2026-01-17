@@ -12,6 +12,8 @@
 //! Descriptor errors
 use core::fmt;
 
+use miniscript::{Descriptor, DescriptorPublicKey};
+
 /// Errors related to the parsing and usage of descriptors
 #[derive(Debug, PartialEq)]
 pub enum Error {
@@ -41,10 +43,6 @@ pub enum Error {
     Miniscript(miniscript::Error),
     /// Hex decoding error
     Hex(bitcoin::hex::HexToBytesError),
-    /// The keychain exists in the `KeyRing` but mapped to a different descriptor
-    KeychainAlreadyExists,
-    /// The descriptor exists in the `KeyRing` but mapped to a different keychain
-    DescAlreadyExists,
 }
 
 impl From<crate::keys::KeyError> for Error {
@@ -82,8 +80,6 @@ impl fmt::Display for Error {
             Self::Pk(err) => write!(f, "Key-related error: {err}"),
             Self::Miniscript(err) => write!(f, "Miniscript error: {err}"),
             Self::Hex(err) => write!(f, "Hex decoding error: {err}"),
-            Self::KeychainAlreadyExists => write!(f, "Keychain already exists but corresponds to a different descriptor"),
-            Self::DescAlreadyExists => write!(f, "Descriptor already exists but corresponds to a different keychain"),
         }
     }
 }

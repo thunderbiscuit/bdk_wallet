@@ -18,18 +18,18 @@ pub mod changeset;
 /// Contains error types corresponding to `KeyRing`.
 pub mod error;
 
+use alloc::fmt;
 pub use changeset::ChangeSet;
-pub use error::{LoadError, LoadMismatch};
+pub use error::KeyRingError;
 
 use crate::chain::{DescriptorExt, Merge};
 use crate::descriptor::check_wallet_descriptor;
-use crate::descriptor::{DescriptorError, IntoWalletDescriptor};
-use crate::wallet::DescriptorToExtract;
+use crate::descriptor::IntoWalletDescriptor;
+use crate::wallet::{DescriptorToExtract, LoadError};
 use alloc::collections::BTreeMap;
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::Network;
 use miniscript::{Descriptor, DescriptorPublicKey};
-
 /// KeyRing.
 #[derive(Debug, Clone)]
 pub struct KeyRing<K> {
@@ -41,7 +41,7 @@ pub struct KeyRing<K> {
 
 impl<K> KeyRing<K>
 where
-    K: Ord + Clone,
+    K: Ord + Clone + fmt::Debug,
 {
     /// Construct a new [`KeyRing`] with the provided `network` and a descriptor. This descriptor
     /// will automatically become your default keychain. You can change your default keychain
@@ -54,7 +54,7 @@ where
         network: Network,
         keychain: K,
         descriptor: impl IntoWalletDescriptor,
-    ) -> Result<Self, DescriptorError> {
+    ) -> Result<Self, KeyRingError<K>> {
         let secp = Secp256k1::new();
         let descriptor = descriptor.into_wallet_descriptor(&secp, network.into())?.0;
         check_wallet_descriptor(&descriptor)?;
@@ -77,11 +77,10 @@ where
         network: Network,
         descriptors: BTreeMap<K, D>,
         default_keychain: Option<K>,
-    ) -> Result<Self, DescriptorError> {
+    ) -> Result<Self, KeyRingError<K>> {
         // ToDo: maybe we can use something more generic than a map?
-        // ToDo: handle error
         if descriptors.is_empty() {
-            panic!()
+            return Err(KeyRingError::DescMissing);
         };
 
         let mut desc_iter = descriptors.into_iter();
@@ -94,10 +93,7 @@ where
         };
 
         for (keychain, desc) in desc_iter {
-            let mut default = false;
-            if curr_default == keychain {
-                default = true;
-            }
+            let default = keychain == curr_default;
             keyring.add_descriptor(keychain, desc, default)?;
         }
 
@@ -119,7 +115,7 @@ where
         keychain: K,
         descriptor: impl IntoWalletDescriptor,
         default: bool,
-    ) -> Result<ChangeSet<K>, DescriptorError> {
+    ) -> Result<ChangeSet<K>, KeyRingError<K>> {
         let descriptor = descriptor
             .into_wallet_descriptor(&self.secp, self.network.into())?
             .0;
@@ -128,10 +124,10 @@ where
         // if the descriptor or keychain already exist
         for (keychain_old, desc) in self.descriptors.iter() {
             if (desc == &descriptor) && (keychain_old != &keychain) {
-                return Err(DescriptorError::DescAlreadyExists);
+                return Err(KeyRingError::DescAlreadyExists(desc.clone()));
             }
             if (keychain_old == &keychain) && (desc != &descriptor) {
-                return Err(DescriptorError::KeychainAlreadyExists);
+                return Err(KeyRingError::KeychainAlreadyExists(keychain));
             }
         }
 
@@ -192,16 +188,17 @@ where
         // check network is as expected
         if let Some(expected_network) = check_network {
             if loaded_network != expected_network {
-                return Err(LoadError::Mismatch(LoadMismatch::Network {
+                return Err(LoadError::NetworkMismatch {
                     loaded: loaded_network,
                     expected: expected_network,
-                }));
+                });
             }
         }
 
         // check the descriptors are valid
         for desc in changeset.descriptors.values() {
-            check_wallet_descriptor(desc)?;
+            check_wallet_descriptor(desc)
+                .map_err(|err| LoadError::InvalidKeyRing(KeyRingError::Descriptor(err)))?;
         }
 
         // check expected descriptors are present
@@ -210,9 +207,12 @@ where
                 None => Err(LoadError::MissingKeychain(keychain))?,
                 Some(loaded_desc) => {
                     if let Some(make_desc) = check_desc {
-                        let (exp_desc, _) = make_desc(&secp, loaded_network.into())?;
+                        let (exp_desc, _) =
+                            make_desc(&secp, loaded_network.into()).map_err(|err| {
+                                LoadError::InvalidKeyRing(KeyRingError::Descriptor(err))
+                            })?;
                         if exp_desc.descriptor_id() != loaded_desc.descriptor_id() {
-                            Err(LoadMismatch::Descriptor {
+                            Err(LoadError::DescriptorMismatch {
                                 keychain,
                                 loaded: loaded_desc.clone(),
                                 expected: exp_desc,
@@ -229,7 +229,7 @@ where
             Some(loaded) => {
                 if let Some(expected) = check_default {
                     if *loaded != expected {
-                        Err(LoadMismatch::DefaultKeychain {
+                        Err(LoadError::DefaultKeychainMismatch {
                             loaded: loaded.clone(),
                             expected,
                         })?

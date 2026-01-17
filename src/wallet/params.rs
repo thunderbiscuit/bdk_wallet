@@ -6,7 +6,7 @@ use miniscript::descriptor::KeyMap;
 
 use crate::{
     descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor},
-    keyring::{self, KeyRing},
+    keyring::{self, KeyRing, KeyRingError},
     utils::SecpCtx, // WalletPersister,
     AsyncWalletPersister,
     CreateWithPersistError,
@@ -168,7 +168,7 @@ where
     }
 
     /// Create [`Wallet`] without persistence.
-    pub fn create_wallet_no_persist(self) -> Wallet<K> {
+    pub fn create_wallet_no_persist(self) -> Result<Wallet<K>, KeyRingError<K>> {
         Wallet::create_with_params(self)
     }
 }

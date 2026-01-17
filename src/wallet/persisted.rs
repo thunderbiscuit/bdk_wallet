@@ -12,12 +12,9 @@ use chain::Merge;
 
 use bitcoin::BlockHash;
 
-use crate::{
-    descriptor::{calc_checksum, DescriptorError},
-    keyring, ChangeSet, CreateParams, LoadParams, Wallet,
-};
+use crate::{descriptor::calc_checksum, keyring, ChangeSet, CreateParams, LoadParams, Wallet};
 
-use crate::keyring::KeyRing;
+use crate::keyring::{KeyRing, KeyRingError};
 
 /// Trait that persists [`PersistedWallet`].
 ///
@@ -178,8 +175,8 @@ where
                 existing,
             )));
         }
-        let mut inner =
-            Wallet::create_with_params(params);
+        let mut inner = Wallet::create_with_params(params)
+            .map_err(|e| CreateWithPersistError::InvalidKeyRing(e))?;
         if let Some(changeset) = inner.take_staged() {
             P::persist(persister, &changeset).map_err(CreateWithPersistError::Persist)?;
         }
@@ -241,9 +238,11 @@ where
                 existing,
             )));
         }
-        let mut inner =
-            Wallet::create_with_params(params);
+
+        let mut inner = Wallet::create_with_params(params)
+            .map_err(|e| CreateWithPersistError::InvalidKeyRing(e))?;
         if let Some(changeset) = inner.take_staged() {
+
             P::persist(persister, &changeset)
                 .await
                 .map_err(CreateWithPersistError::Persist)?;
@@ -403,8 +402,8 @@ where
     Persist(E),
     /// Persister already has wallet data.
     DataAlreadyExists(Box<ChangeSet<K>>),
-    /// Occurs when the loaded changeset cannot construct [`Wallet`].
-    Descriptor(DescriptorError),
+    /// Occurs when the provided [`KeyRing`] cannot construct [`Wallet`].
+    InvalidKeyRing(keyring::KeyRingError<K>),
 }
 
 impl<E: fmt::Display, K: fmt::Display + Ord> fmt::Display for CreateWithPersistError<E, K> {
@@ -418,7 +417,7 @@ impl<E: fmt::Display, K: fmt::Display + Ord> fmt::Display for CreateWithPersistE
                 )?;
                 changeset_info(f, changeset)
             }
-            Self::Descriptor(err) => {
+            Self::InvalidKeyRing(err) => {
                 write!(f, "{err}")
             }
         }

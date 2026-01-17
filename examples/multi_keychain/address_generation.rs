@@ -27,7 +27,7 @@ fn main() {
     println!("│  Generating Addresses With Multi-Keychain Wallets  │");
     println!("│                                                    │");
     println!("└────────────────────────────────────────────────────┘");
-    
+
     // Create a wallet with three keychains
     let descriptors: BTreeMap<KeychainIdentifier, &str> = [
         (KeychainIdentifier::A, DESC_A),
@@ -37,12 +37,14 @@ fn main() {
     .into();
 
     let keyring = KeyRing::new_with_descriptors(Network::Signet, descriptors, None).unwrap();
-    let mut wallet = Wallet::create(keyring).create_wallet_no_persist();
+    let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
 
     println!("Created wallet with 3 keychains (A, B, C)\n");
 
     println!("# 1. Custom keychain address generation");
-    println!("   Just like the 2.X Wallet, each keychain maintains its own revealed addresses indices.");
+    println!(
+        "   Just like the 2.X Wallet, each keychain maintains its own revealed addresses indices."
+    );
     println!("   You can reveal an address from any keychain.\n");
 
     println!("   Keychain A:");
@@ -68,12 +70,18 @@ fn main() {
 
     for _ in 0..3 {
         let addr = wallet.reveal_next_default_address();
-        println!("   - Index {}: {} (keychain: {:?})", addr.index, addr.address, addr.keychain);
+        println!(
+            "   - Index {}: {} (keychain: {:?})",
+            addr.index, addr.address, addr.keychain
+        );
     }
 
     println!("\n3. Using the last revealed index");
     for keychain in wallet.keychains().keys() {
-        let last_revealed_index = wallet.derivation_index(keychain.clone());
-        println!("   Last revealed index on keychain {:?}: {:?}", keychain, last_revealed_index);
+        let last_revealed_index = wallet.derivation_index(*keychain);
+        println!(
+            "   Last revealed index on keychain {:?}: {:?}",
+            keychain, last_revealed_index
+        );
     }
 }

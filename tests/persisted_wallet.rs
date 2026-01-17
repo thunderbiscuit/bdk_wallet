@@ -11,7 +11,7 @@ use bdk_chain::{
     DescriptorExt,
 };
 use bdk_wallet::descriptor::IntoWalletDescriptor;
-use bdk_wallet::keyring::{self, KeyRing};
+use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
     ChangeSet, KeychainKind, LoadError, LoadWithPersistError, Wallet, WalletPersister,
@@ -286,12 +286,12 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             Wallet::load()
                 .check_network(Network::Regtest)
                 .load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Keyring(
-                keyring::LoadError::Mismatch(keyring::LoadMismatch::Network {
+            Err(LoadWithPersistError::InvalidChangeSet(
+                LoadError::NetworkMismatch {
                     loaded: Network::Testnet,
                     expected: Network::Regtest,
-                })
-            ))),
+                }
+            )),
             "unexpected network check result: Regtest (check) is not Testnet (loaded)",
         );
         let mainnet_hash = BlockHash::from_byte_array(ChainHash::BITCOIN.to_bytes());
@@ -309,12 +309,12 @@ fn wallet_load_checks() -> anyhow::Result<()> {
             Wallet::load()
                 .check_descriptor(KeychainKind::External, Some(internal_desc))
                 .load_wallet(&mut open_db(&file_path)?),
-            Err(LoadWithPersistError::InvalidChangeSet(LoadError::Keyring(
-                keyring::LoadError::Mismatch(keyring::LoadMismatch::Descriptor {
+            Err(LoadWithPersistError::InvalidChangeSet(
+                LoadError::DescriptorMismatch {
                     keychain: KeychainKind::External,
                     ..
-                })
-            ))),
+                }
+            )),
             "unexpected descriptors check result",
         );
         // assert_matches!(
