@@ -84,6 +84,8 @@ pub use persisted::*;
 pub use utils::IsDust;
 pub use utils::TxDetails;
 
+type KeychainTxGraph<K> = IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<K>>;
+
 /// A Bitcoin wallet
 ///
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
@@ -106,7 +108,7 @@ pub struct Wallet {
     signers: Arc<SignersContainer>,
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
-    tx_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
+    tx_graph: KeychainTxGraph<KeychainKind>,
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
@@ -2321,9 +2323,7 @@ impl Wallet {
 
         // Try to figure out the keychain and derivation for every input and output.
         for (is_input, index, out) in utxos.into_iter() {
-            if let Some(&(keychain, child)) =
-                self.tx_graph.index.index_of_spk(out.script_pubkey)
-            {
+            if let Some(&(keychain, child)) = self.tx_graph.index.index_of_spk(out.script_pubkey) {
                 let desc = self.public_descriptor(keychain);
                 let desc = desc
                     .at_derivation_index(child)
@@ -2510,11 +2510,7 @@ impl Wallet {
                 .apply_header_connected_to(&block.header, height, connected_to)?
                 .into(),
         );
-        changeset.merge(
-            self.tx_graph
-                .apply_block_relevant(block, height)
-                .into(),
-        );
+        changeset.merge(self.tx_graph.apply_block_relevant(block, height).into());
         self.stage.merge(changeset);
         Ok(())
     }
@@ -2747,8 +2743,7 @@ fn make_indexed_graph(
     change_descriptor: Option<ExtendedDescriptor>,
     lookahead: u32,
     use_spk_cache: bool,
-) -> Result<IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>, DescriptorError>
-{
+) -> Result<KeychainTxGraph<KeychainKind>, DescriptorError> {
     let (indexed_graph, changeset) = IndexedTxGraph::from_changeset(
         chain::indexed_tx_graph::ChangeSet {
             tx_graph: tx_graph_changeset,
