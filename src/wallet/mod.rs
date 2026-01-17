@@ -84,6 +84,8 @@ pub use persisted::*;
 pub use utils::IsDust;
 pub use utils::TxDetails;
 
+type KeychainTxGraph<KeychainKind> = IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>;
+
 /// A Bitcoin wallet
 ///
 /// The `Wallet` acts as a way of coherently interfacing with output descriptors and related
@@ -106,7 +108,7 @@ pub struct Wallet {
     signers: Arc<SignersContainer>,
     change_signers: Arc<SignersContainer>,
     chain: LocalChain,
-    tx_graph: IndexedTxGraph<ConfirmationBlockTime, KeychainTxOutIndex<KeychainKind>>,
+    tx_graph: KeychainTxGraph<KeychainKind>,
     stage: ChangeSet,
     network: Network,
     secp: SecpCtx,
