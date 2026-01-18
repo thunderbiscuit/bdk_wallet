@@ -466,14 +466,26 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
     let mut conn = rusqlite::Connection::open_in_memory()?;
 
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let keyring = KeyRing::new_with_descriptors(Network::Signet, [(KeychainKind::External, desc), (KeychainKind::Internal, change_desc)].into(), Some(KeychainKind::External))?;
-    let mut wallet = Wallet::create(keyring)
-        .create_wallet(&mut conn)?;
+    let keyring = KeyRing::new_with_descriptors(
+        Network::Signet,
+        [
+            (KeychainKind::External, desc),
+            (KeychainKind::Internal, change_desc),
+        ]
+        .into(),
+        Some(KeychainKind::External),
+    )?;
+    let mut wallet = Wallet::create(keyring).create_wallet(&mut conn)?;
 
     // Receive coins.
     let mut outpoints = vec![];
     for i in 0..3 {
-        let op = receive_output(&mut wallet, Amount::from_sat(10_000), ReceiveTo::Mempool(i), KeychainKind::External);
+        let op = receive_output(
+            &mut wallet,
+            Amount::from_sat(10_000),
+            ReceiveTo::Mempool(i),
+            KeychainKind::External,
+        );
         outpoints.push(op);
     }
 
@@ -506,21 +518,21 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
         let locked_unspent = wallet.list_locked_unspent().collect::<Vec<_>>();
         assert_eq!(locked_unspent, outpoints);
 
-//        // Test: Locked outpoints are excluded from coin selection
-//        let addr = wallet.next_unused_address(KeychainKind::External).address;
-//        let mut tx_builder = wallet.build_tx();
-//        tx_builder.add_recipient(addr, Amount::from_sat(10_000));
-//        let res = tx_builder.finish();
-//        assert!(
-//            matches!(
-//                res,
-//                Err(CreateTxError::CoinSelection(InsufficientFunds {
-//                    available: Amount::ZERO,
-//                    ..
-//                })),
-//            ),
-//            "Locked outpoints should not be selected",
-//        );
+        //        // Test: Locked outpoints are excluded from coin selection
+        //        let addr = wallet.next_unused_address(KeychainKind::External).address;
+        //        let mut tx_builder = wallet.build_tx();
+        //        tx_builder.add_recipient(addr, Amount::from_sat(10_000));
+        //        let res = tx_builder.finish();
+        //        assert!(
+        //            matches!(
+        //                res,
+        //                Err(CreateTxError::CoinSelection(InsufficientFunds {
+        //                    available: Amount::ZERO,
+        //                    ..
+        //                })),
+        //            ),
+        //            "Locked outpoints should not be selected",
+        //        );
     }
 
     // Test: Unlock outpoints

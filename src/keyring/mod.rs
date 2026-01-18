@@ -26,6 +26,7 @@ use crate::chain::{DescriptorExt, Merge};
 use crate::descriptor::check_wallet_descriptor;
 use crate::descriptor::IntoWalletDescriptor;
 use crate::wallet::{DescriptorToExtract, LoadError};
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::Network;
@@ -124,7 +125,7 @@ where
         // if the descriptor or keychain already exist
         for (keychain_old, desc) in self.descriptors.iter() {
             if (desc == &descriptor) && (keychain_old != &keychain) {
-                return Err(KeyRingError::DescAlreadyExists(desc.clone()));
+                return Err(KeyRingError::DescAlreadyExists(Box::new(desc.clone())));
             }
             if (keychain_old == &keychain) && (desc != &descriptor) {
                 return Err(KeyRingError::KeychainAlreadyExists(keychain));
@@ -214,8 +215,8 @@ where
                         if exp_desc.descriptor_id() != loaded_desc.descriptor_id() {
                             Err(LoadError::DescriptorMismatch {
                                 keychain,
-                                loaded: loaded_desc.clone(),
-                                expected: exp_desc,
+                                loaded: Box::new(loaded_desc.clone()),
+                                expected: Box::new(exp_desc),
                             })?
                         }
                     }

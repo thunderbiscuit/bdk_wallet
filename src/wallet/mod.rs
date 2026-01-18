@@ -194,9 +194,9 @@ pub enum LoadError<K> {
         /// Keychain identifying the descriptor
         keychain: K,
         /// The loaded descriptor
-        loaded: ExtendedDescriptor,
+        loaded: Box<ExtendedDescriptor>,
         /// The expected descriptor
-        expected: ExtendedDescriptor,
+        expected: Box<ExtendedDescriptor>,
     },
     /// The default keychain is not as expected
     DefaultKeychainMismatch {
@@ -289,7 +289,7 @@ where
                 .insert_descriptor(keychain.clone(), desc.clone())
                 .map_err(|e| match e {
                     InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
-                        KeyRingError::DescAlreadyExists(desc)
+                        KeyRingError::DescAlreadyExists(Box::new(desc))
                     }
                     InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
                         KeyRingError::KeychainAlreadyExists(keychain)
@@ -299,7 +299,7 @@ where
         }
 
         let tx_graph = KeychainTxGraph::new(index);
-        
+
         let locked_outpoints = HashSet::new();
 
         let stage = ChangeSet {
@@ -485,7 +485,7 @@ where
             chain: local_chain,
             tx_graph: indexed_graph,
             stage,
-            locked_outpoints
+            locked_outpoints,
         }))
     }
 
@@ -762,52 +762,50 @@ where
         self.stage.take()
     }
 
+    /// List the locked outpoints.
+    pub fn list_locked_outpoints(&self) -> impl Iterator<Item = OutPoint> + '_ {
+        self.locked_outpoints.iter().copied()
+    }
 
-     /// List the locked outpoints.
-     pub fn list_locked_outpoints(&self) -> impl Iterator<Item = OutPoint> + '_ {
-         self.locked_outpoints.iter().copied()
-     }
+    /// List unspent outpoints that are currently locked.
+    pub fn list_locked_unspent(&self) -> impl Iterator<Item = OutPoint> + '_ {
+        self.list_unspent()
+            .filter(|output| self.is_outpoint_locked(output.outpoint))
+            .map(|output| output.outpoint)
+    }
 
-     /// List unspent outpoints that are currently locked.
-     pub fn list_locked_unspent(&self) -> impl Iterator<Item = OutPoint> + '_ {
-         self.list_unspent()
-             .filter(|output| self.is_outpoint_locked(output.outpoint))
-             .map(|output| output.outpoint)
-     }
+    /// Whether the `outpoint` is locked. See [`Wallet::lock_outpoint`] for more.
+    pub fn is_outpoint_locked(&self, outpoint: OutPoint) -> bool {
+        self.locked_outpoints.contains(&outpoint)
+    }
 
-     /// Whether the `outpoint` is locked. See [`Wallet::lock_outpoint`] for more.
-     pub fn is_outpoint_locked(&self, outpoint: OutPoint) -> bool {
-         self.locked_outpoints.contains(&outpoint)
-     }
+    /// Lock a wallet output identified by the given `outpoint`.
+    ///
+    /// A locked UTXO will not be selected as an input to fund a transaction. This is useful
+    /// for excluding or reserving candidate inputs during transaction creation.
+    ///
+    /// **You must persist the staged change for the lock status to be persistent**. To unlock a
+    /// previously locked outpoint, see [`Wallet::unlock_outpoint`].
+    pub fn lock_outpoint(&mut self, outpoint: OutPoint) {
+        if self.locked_outpoints.insert(outpoint) {
+            let changeset = locked_outpoints::ChangeSet {
+                outpoints: [(outpoint, true)].into(),
+            };
+            self.stage.merge(changeset.into());
+        }
+    }
 
-     /// Lock a wallet output identified by the given `outpoint`.
-     ///
-     /// A locked UTXO will not be selected as an input to fund a transaction. This is useful
-     /// for excluding or reserving candidate inputs during transaction creation.
-     ///
-     /// **You must persist the staged change for the lock status to be persistent**. To unlock a
-     /// previously locked outpoint, see [`Wallet::unlock_outpoint`].
-     pub fn lock_outpoint(&mut self, outpoint: OutPoint) {
-         if self.locked_outpoints.insert(outpoint) {
-             let changeset = locked_outpoints::ChangeSet {
-                 outpoints: [(outpoint, true)].into(),
-             };
-             self.stage.merge(changeset.into());
-         }
-     }
-
-     /// Unlock the wallet output of the specified `outpoint`.
-     ///
-     /// **You must persist the staged change for the lock status to be persistent**.
-     pub fn unlock_outpoint(&mut self, outpoint: OutPoint) {
-         if self.locked_outpoints.remove(&outpoint) {
-             let changeset = locked_outpoints::ChangeSet {
-                 outpoints: [(outpoint, false)].into(),
-             };
-             self.stage.merge(changeset.into());
-         }
-     }
-
+    /// Unlock the wallet output of the specified `outpoint`.
+    ///
+    /// **You must persist the staged change for the lock status to be persistent**.
+    pub fn unlock_outpoint(&mut self, outpoint: OutPoint) {
+        if self.locked_outpoints.remove(&outpoint) {
+            let changeset = locked_outpoints::ChangeSet {
+                outpoints: [(outpoint, false)].into(),
+            };
+            self.stage.merge(changeset.into());
+        }
+    }
 }
 
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
@@ -1937,7 +1935,6 @@ where
 //             .as_ref()
 //             .clone();
 
-
 //         if chain_positions
 //             .get(&txid)
 //             .ok_or(BuildFeeBumpError::TransactionNotFound(txid))?
@@ -2016,7 +2013,6 @@ where
 //             })
 //             .collect::<Result<_, _>>()?;
 
-
 //         if tx.output.len() > 1 {
 //             let mut change_index = None;
 //             for (index, txout) in tx.output.iter().enumerate() {
@@ -2048,7 +2044,6 @@ where
 //             }),
 //             ..Default::default()
 //         };
-
 
 //         Ok(TxBuilder {
 //             wallet: self,
@@ -2595,8 +2590,6 @@ where
 //         &self.chain
 //     }
 
-
-
 //     /// Used internally to ensure that all methods requiring a [`KeychainKind`] will use a
 //     /// keychain with an associated descriptor. For example in case the wallet was created
 //     /// with only one keychain, passing [`KeychainKind::Internal`] here will instead return
@@ -2689,7 +2682,7 @@ where
                         use bdk_chain::indexer::keychain_txout::InsertDescriptorError;
                         match e {
                             InsertDescriptorError::DescriptorAlreadyAssigned { .. } => {
-                                KeyRingError::DescAlreadyExists(desc)
+                                KeyRingError::DescAlreadyExists(Box::new(desc))
                             }
                             InsertDescriptorError::KeychainAlreadyAssigned { .. } => {
                                 KeyRingError::KeychainAlreadyExists(keychain)

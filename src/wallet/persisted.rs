@@ -168,7 +168,7 @@ where
     pub fn create(
         persister: &mut P,
         params: CreateParams<K>,
-    ) -> Result<Self, CreateWithPersistError<P::Error,K>> {
+    ) -> Result<Self, CreateWithPersistError<P::Error, K>> {
         let existing = P::initialize(persister).map_err(CreateWithPersistError::Persist)?;
         if !existing.is_empty() {
             return Err(CreateWithPersistError::DataAlreadyExists(Box::new(
@@ -229,7 +229,7 @@ where
     pub async fn create_async(
         persister: &mut P,
         params: CreateParams<K>,
-    ) -> Result<Self, CreateWithPersistError<P::Error,K>> {
+    ) -> Result<Self, CreateWithPersistError<P::Error, K>> {
         let existing = P::initialize(persister)
             .await
             .map_err(CreateWithPersistError::Persist)?;
@@ -242,7 +242,6 @@ where
         let mut inner = Wallet::create_with_params(params)
             .map_err(|e| CreateWithPersistError::InvalidKeyRing(e))?;
         if let Some(changeset) = inner.take_staged() {
-
             P::persist(persister, &changeset)
                 .await
                 .map_err(CreateWithPersistError::Persist)?;
@@ -252,7 +251,6 @@ where
             _marker: PhantomData,
         })
     }
-        
 
     /// Load a previously [`PersistedWallet`] from the given async `persister` and `params`.
     pub async fn load_async(

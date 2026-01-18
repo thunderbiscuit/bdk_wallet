@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use core::fmt;
 
 use miniscript::{Descriptor, DescriptorPublicKey};
@@ -10,7 +11,7 @@ pub enum KeyRingError<K> {
     /// The keychain exists in the [`KeyRing`] but mapped to a different descriptor
     KeychainAlreadyExists(K),
     /// The descriptor exists in the [`KeyRing`] but mapped to a different keychain
-    DescAlreadyExists(Descriptor<DescriptorPublicKey>),
+    DescAlreadyExists(Box<Descriptor<DescriptorPublicKey>>),
     /// No descriptor was provided
     DescMissing,
 }

@@ -109,7 +109,10 @@ fn duplicate_desc_keychain() {
     let res1 = keyring
         .add_descriptor(desc2.descriptor_id(), desc1.clone(), false)
         .err();
-    assert_eq!(res1, Some(KeyRingError::DescAlreadyExists(desc1.clone())));
+    assert_eq!(
+        res1,
+        Some(KeyRingError::DescAlreadyExists(Box::new(desc1.clone())))
+    );
 
     let res2 = keyring.add_descriptor(did1, desc2, false).err();
     assert_eq!(res2, Some(KeyRingError::KeychainAlreadyExists(did1)));
