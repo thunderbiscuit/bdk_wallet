@@ -1305,7 +1305,7 @@ mod test {
 
     // 1 privkey and 1 pubkey descriptor, 1 private key is required.
     #[test]
-    #[ignore] // see https://github.com/bitcoindevkit/bdk/issues/225
+    #[ignore = "Policy will be replaced by rust-miniscript in the future, see bdk#255 for context"]
     fn test_extract_policy_for_sh_multi_complete_1of2() {
         let secp = Secp256k1::new();
 
@@ -1398,7 +1398,7 @@ mod test {
 
     // Single key, 1 privkey and 1 pubkey descriptor, 1 privkey is required.
     #[test]
-    #[ignore] // see https://github.com/bitcoindevkit/bdk/issues/225
+    #[ignore = "Policy will be replaced by rust-miniscript in the future, see bdk#255 for context"]
     fn test_extract_policy_for_single_wsh_multi_complete_1of2() {
         let secp = Secp256k1::new();
 
@@ -1427,9 +1427,8 @@ mod test {
     }
 
     // Test ExtractPolicy trait with descriptors containing timelocks in a `thresh()`.
-
     #[test]
-    #[ignore] // see https://github.com/bitcoindevkit/bdk/issues/225
+    #[ignore = "Policy will be replaced by rust-miniscript in the future, see bdk#255 for context"]
     fn test_extract_policy_for_wsh_multi_timelock() {
         let secp = Secp256k1::new();
 
@@ -1465,10 +1464,8 @@ mod test {
         );
     }
 
-    // Mixed timelocks should fail.
-
+    // Merging mixed timelocks should fail.
     #[test]
-    #[ignore]
     fn test_extract_policy_for_wsh_mixed_timelocks() {
         let secp = Secp256k1::new();
         let (prvkey0, _pubkey0, _fingerprint0) = setup_keys(TPRV0_STR, PATH, &secp);
@@ -1484,57 +1481,69 @@ mod test {
             .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let signers_container = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
-        let _policy = wallet_desc
+        let policy = wallet_desc
             .extract_policy(&signers_container, BuildSatisfaction::None, &secp)
             .unwrap()
             .unwrap();
-        // println!("desc policy = {:?}", policy); // TODO remove
-        // TODO how should this fail with mixed timelocks?
+        let policy_condition = policy.get_condition(&BTreeMap::new());
+
+        assert_eq!(policy_condition, Err(PolicyError::MixedTimelockUnits));
     }
 
     // Multiple timelocks of the same type should be correctly merged together.
     #[test]
-    #[ignore]
     fn test_extract_policy_for_multiple_same_timelocks() {
         let secp = Secp256k1::new();
+
+        // Merge block-based timelocks: `after(100)` and `after(200)` should yield `after(200)`
         let (prvkey0, _pubkey0, _fingerprint0) = setup_keys(TPRV0_STR, PATH, &secp);
-        let locktime_blocks0 = 100;
-        let locktime_blocks1 = 200;
+        let locktime_blocks_100 = 100;
+        let locktime_blocks_200 = 200;
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey0),
-            and_v(v: after(locktime_blocks0), after(locktime_blocks1))
+            and_v(v: after(locktime_blocks_100), after(locktime_blocks_200))
         )))
         .unwrap();
         let (wallet_desc, keymap) = desc
             .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let signers_container = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
-        let _policy = wallet_desc
+        let policy = wallet_desc
             .extract_policy(&signers_container, BuildSatisfaction::None, &secp)
             .unwrap()
             .unwrap();
-        // println!("desc policy = {:?}", policy); // TODO remove
-        // TODO how should this merge timelocks?
-        let (prvkey1, _pubkey1, _fingerprint1) = setup_keys(TPRV0_STR, PATH, &secp);
-        let locktime_seconds0 = 500000100;
-        let locktime_seconds1 = 500000200;
+        let condition = policy.get_condition(&BTreeMap::new()).unwrap();
+        assert_eq!(
+            condition.timelock,
+            Some(absolute::LockTime::from_height(locktime_blocks_200).unwrap())
+        );
+        assert_eq!(condition.csv, None);
+
+        // Merge time-based timelocks: merging
+        // `after(500000100)` and `after(500000200)` should yield `after(500000200)`.
+        let (prvkey1, _pubkey1, _fingerprint1) = setup_keys(TPRV1_STR, PATH, &secp);
+        let locktime_seconds_offset = 500000000;
+        let locktime_seconds_100 = locktime_seconds_offset + 100;
+        let locktime_seconds_200 = locktime_seconds_offset + 200;
         let desc = descriptor!(sh(and_v(
             v: pk(prvkey1),
-            and_v(v: after(locktime_seconds0), after(locktime_seconds1))
+            and_v(v: after(locktime_seconds_100), after(locktime_seconds_200))
         )))
         .unwrap();
         let (wallet_desc, keymap) = desc
             .into_wallet_descriptor(&secp, NetworkKind::Test)
             .unwrap();
         let signers_container = Arc::new(SignersContainer::build(keymap, &wallet_desc, &secp));
-        let _policy = wallet_desc
+        let policy = wallet_desc
             .extract_policy(&signers_container, BuildSatisfaction::None, &secp)
             .unwrap()
             .unwrap();
-
-        // println!("desc policy = {:?}", policy); // TODO remove
-
-        // TODO how should this merge timelocks?
+        let condition = policy.get_condition(&BTreeMap::new()).unwrap();
+        assert_eq!(
+            condition.timelock,
+            Some(absolute::LockTime::from_time(locktime_seconds_200).unwrap())
+        );
+        assert_eq!(condition.csv, None);
     }
 
     #[test]
