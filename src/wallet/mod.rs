@@ -52,6 +52,7 @@ use rand_core::RngCore;
 mod changeset;
 pub mod coin_selection;
 pub mod error;
+mod event;
 pub mod export;
 pub mod locked_outpoints;
 mod params;
@@ -79,6 +80,7 @@ use crate::wallet::{
 // re-exports
 pub use bdk_chain::Balance;
 pub use changeset::ChangeSet;
+pub use event::*;
 pub use params::*;
 pub use persisted::*;
 pub use utils::IsDust;
