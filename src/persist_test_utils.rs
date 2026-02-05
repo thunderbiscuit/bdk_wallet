@@ -160,7 +160,6 @@ pub fn persist_wallet_changeset<Store, CreateStore, K>(
     let keyring_changeset = crate::keyring::ChangeSet {
         network: Some(Network::Testnet),
         descriptors: [(keychain.clone(), descriptor.clone())].into(),
-        default_keychain: Some(keychain),
     };
 
     let mut changeset = ChangeSet {
@@ -273,7 +272,6 @@ pub fn persist_multiple_wallet_changesets<Store, CreateStores, K>(
     let keyring_changeset = crate::keyring::ChangeSet {
         network: Some(Network::Testnet),
         descriptors: [(keychain.clone(), descriptor.clone())].into(),
-        default_keychain: Some(keychain.clone()),
     };
 
     let changeset1 = ChangeSet {
@@ -295,7 +293,6 @@ pub fn persist_multiple_wallet_changesets<Store, CreateStores, K>(
     let keyring_changeset2 = crate::keyring::ChangeSet {
         network: Some(Network::Testnet),
         descriptors: [(keychain.clone(), descriptor.clone())].into(),
-        default_keychain: Some(keychain),
     };
 
     let changeset2 = ChangeSet {
@@ -392,7 +389,6 @@ pub fn persist_keychain<Store, CreateStore, K>(
 
     let keyring_changeset = crate::keyring::ChangeSet {
         descriptors: [(keychain.clone(), descriptor.clone())].into(),
-        default_keychain: Some(keychain.clone()),
         ..crate::keyring::ChangeSet::default()
     };
 
@@ -411,8 +407,6 @@ pub fn persist_keychain<Store, CreateStore, K>(
         *changeset_read.keyring.descriptors.get(&keychain).unwrap(),
         descriptor
     );
-
-    assert_eq!(changeset_read.keyring.default_keychain, Some(keychain));
 }
 
 /// tests if multiple descriptors are being persisted correctly
@@ -454,7 +448,6 @@ pub fn persist_keychains<Store, CreateStore, K>(
             (keychain2.clone(), desc2.clone()),
         ]
         .into(),
-        default_keychain: Some(keychain1.clone()),
         ..crate::keyring::ChangeSet::default()
     };
 
@@ -478,13 +471,7 @@ pub fn persist_keychains<Store, CreateStore, K>(
         desc2
     );
 
-    assert_eq!(
-        changeset_read.keyring.default_keychain,
-        Some(keychain1.clone())
-    );
-
     let keyring_changeset_new = crate::keyring::ChangeSet {
-        default_keychain: Some(keychain2.clone()),
         ..crate::keyring::ChangeSet::default()
     };
 
@@ -497,10 +484,7 @@ pub fn persist_keychains<Store, CreateStore, K>(
 
     let changeset_read_new =
         WalletPersister::initialize(&mut store).expect("should read persisted changeset");
-    assert_eq!(
-        changeset_read_new.keyring.default_keychain,
-        Some(keychain2.clone())
-    );
+
     assert_eq!(
         *changeset_read_new
             .keyring
