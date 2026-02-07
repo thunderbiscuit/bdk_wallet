@@ -479,9 +479,14 @@ where
     pub fn latest_checkpoint(&self) -> CheckPoint {
         self.chain.tip()
     }
+
+    /// Get all the checkpoints the wallet is currently storing indexed by height.
+    pub fn checkpoints(&self) -> CheckPointIter {
+        self.chain.iter_checkpoints()
+    }
 }
 
-// This impl block contains address derivation and other related methods
+// This impl block contains address, scripts, and other related methods
 impl<K> Wallet<K>
 where
     K: Clone + Debug + Ord,
@@ -696,6 +701,13 @@ where
     //             keychain,
     //         })
     // }
+
+    /// Finds how the wallet derived the script pubkey `spk`.
+    ///
+    /// Will only return `Some(_)` if the wallet has given out the spk.
+    pub fn derivation_of_spk(&self, spk: ScriptBuf) -> Option<(K, u32)> {
+        self.indexed_graph.index.index_of_spk(spk).cloned()
+    }
 }
 
 // This impl block contains methods related to `locked_outpoints`
@@ -749,7 +761,6 @@ where
     }
 }
 
-// Fixed?
 // This impl block contains methods related to transactions and transaction building.
 impl<K> Wallet<K>
 where
@@ -774,6 +785,70 @@ where
             .filter(|c_tx| index.is_tx_relevant(&c_tx.tx_node.tx))
     }
 
+    /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
+    ///
+    /// `WalletTx` contains the full transaction alongside meta-data such as:
+    /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that exist
+    ///   in the best chain.
+    /// * The [`ChainPosition`] of the transaction in the best chain - whether the transaction is
+    ///   confirmed or unconfirmed. If the transaction is confirmed, the anchor which proves the
+    ///   confirmation is provided. If the transaction is unconfirmed, the unix timestamp of when
+    ///   the transaction was last seen in the mempool is provided.
+    ///
+    /// ```rust, no_run
+    /// use bdk_chain::Anchor;
+    /// use bdk_wallet::{chain::ChainPosition, KeychainKind, Wallet};
+    /// # let wallet: Wallet<KeychainKind> = todo!();
+    /// # let my_txid: bitcoin::Txid = todo!();
+    ///
+    /// let wallet_tx = wallet.get_tx(my_txid).expect("panic if tx does not exist");
+    ///
+    /// // get reference to full transaction
+    /// println!("my tx: {:#?}", wallet_tx.tx_node.tx);
+    ///
+    /// // list all transaction anchors
+    /// for anchor in wallet_tx.tx_node.anchors {
+    ///     println!(
+    ///         "tx is anchored by block of hash {}",
+    ///         anchor.anchor_block().hash
+    ///     );
+    /// }
+    ///
+    /// // get confirmation status of transaction
+    /// match wallet_tx.chain_position {
+    ///     ChainPosition::Confirmed {
+    ///         anchor,
+    ///         transitively: None,
+    ///     } => println!(
+    ///         "tx is confirmed at height {}, we know this since {}:{} is in the best chain",
+    ///         anchor.block_id.height, anchor.block_id.height, anchor.block_id.hash,
+    ///     ),
+    ///     ChainPosition::Confirmed {
+    ///         anchor,
+    ///         transitively: Some(_),
+    ///     } => println!(
+    ///         "tx is an ancestor of a tx anchored in {}:{}",
+    ///         anchor.block_id.height, anchor.block_id.hash,
+    ///     ),
+    ///     ChainPosition::Unconfirmed { first_seen, last_seen } => println!(
+    ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not anchored in the best chain",
+    ///         first_seen, last_seen
+    ///     ),
+    /// }
+    /// ```
+    ///
+    /// [`Anchor`]: bdk_chain::Anchor
+    pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
+        let graph = self.indexed_graph.graph();
+        graph
+            .list_canonical_txs(
+                &self.chain,
+                self.chain.tip().block_id(),
+                CanonicalizationParams::default(),
+            )
+            .find(|tx| tx.tx_node.txid == txid)
+    }
+
     /// Return the list of unspent outputs of this wallet
     pub fn list_unspent(&self) -> impl Iterator<Item = LocalOutput<K>> + '_ {
         self.indexed_graph
@@ -786,9 +861,145 @@ where
             )
             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
     }
+
+    /// Whether the transaction of `txid` is considered trusted by this wallet.
+    ///
+    /// Trust is defined as a tx of which all of the inputs are controlled by the wallet, as we can
+    /// assume it won't be double-spent unintentionally.
+    pub fn is_tx_trusted(&self, txid: Txid) -> bool {
+        let Some(tx) = self.indexed_graph.graph().get_tx(txid) else {
+            return false;
+        };
+        if tx.input.is_empty() {
+            return false;
+        }
+        tx.input.iter().all(|txin| {
+            let outpoint = txin.previous_output;
+            self.indexed_graph.index.txout(outpoint).is_some()
+        })
+    }
+
+    /// Compute the `tx`'s sent and received [`Amount`]s.
+    ///
+    /// This method returns a tuple `(sent, received)`. Sent is the sum of the txin amounts
+    /// that spend from previous txouts tracked by this wallet. Received is the summation
+    /// of this tx's outputs that send to script pubkeys tracked by this wallet.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// # use bitcoin::Txid;
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # let mut wallet: Wallet<KeychainKind> = todo!();
+    /// # let txid:Txid = todo!();
+    /// let tx = wallet.get_tx(txid).expect("tx exists").tx_node.tx;
+    /// let (sent, received) = wallet.sent_and_received(&tx);
+    /// ```
+    ///
+    /// ```rust, no_run
+    /// # use bitcoin::Psbt;
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # let mut wallet: Wallet<KeychainKind> = todo!();
+    /// # let mut psbt: Psbt = todo!();
+    /// let tx = &psbt.clone().extract_tx().expect("tx");
+    /// let (sent, received) = wallet.sent_and_received(tx);
+    /// ```
+    pub fn sent_and_received(&self, tx: &Transaction) -> (Amount, Amount) {
+        self.indexed_graph.index.sent_and_received(tx, ..)
+    }
+
+    /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
+    /// transaction.
+    ///
+    /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
+    /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    ///
+    /// Note `tx` does not have to be in the graph for this to work.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// # use bitcoin::Txid;
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # let mut wallet: Wallet<KeychainKind> = todo!();
+    /// # let txid:Txid = todo!();
+    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let fee = wallet.calculate_fee(&tx).expect("fee");
+    /// ```
+    ///
+    /// ```rust, no_run
+    /// # use bitcoin::Psbt;
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # let mut wallet: Wallet<KeychainKind> = todo!();
+    /// # let mut psbt: Psbt = todo!();
+    /// let tx = &psbt.clone().extract_tx().expect("tx");
+    /// let fee = wallet.calculate_fee(tx).expect("fee");
+    /// ```
+    /// [`insert_txout`]: Self::insert_txout
+    pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
+        self.indexed_graph.graph().calculate_fee(tx)
+    }
+
+    /// Calculate the [`FeeRate`] for a given transaction.
+    ///
+    /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
+    /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
+    ///
+    /// Note `tx` does not have to be in the graph for this to work.
+    ///
+    /// # Examples
+    ///
+    /// ```rust, no_run
+    /// # use bitcoin::Txid;
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # let mut wallet: Wallet<KeychainKind> = todo!();
+    /// # let txid:Txid = todo!();
+    /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
+    /// let fee_rate = wallet.calculate_fee_rate(&tx).expect("fee rate");
+    /// ```
+    ///
+    /// ```rust, no_run
+    /// # use bitcoin::Psbt;
+    /// # use bdk_wallet::{KeychainKind, Wallet};
+    /// # let mut wallet: Wallet<KeychainKind> = todo!();
+    /// # let mut psbt: Psbt = todo!();
+    /// let tx = &psbt.clone().extract_tx().expect("tx");
+    /// let fee_rate = wallet.calculate_fee_rate(tx).expect("fee rate");
+    /// ```
+    /// [`insert_txout`]: Self::insert_txout
+    pub fn calculate_fee_rate(&self, tx: &Transaction) -> Result<FeeRate, CalculateFeeError> {
+        self.calculate_fee(tx).map(|fee| fee / tx.weight())
+    }
+
+    /// Get the [`TxDetails`] of a wallet transaction.
+    ///
+    /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions, `None`
+    /// is returned.
+    pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
+        let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
+
+        let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
+        let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
+        let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
+        let balance_delta: SignedAmount = self.indexed_graph.index.net_value(&tx.tx_node.tx, ..);
+        let chain_position = tx.chain_position;
+
+        let tx_details: TxDetails = TxDetails {
+            txid,
+            received,
+            sent,
+            fee,
+            fee_rate,
+            balance_delta,
+            chain_position,
+            tx: tx.tx_node.tx,
+        };
+
+        Some(tx_details)
+    }
 }
 
-// This impl block contains `balance` methods and related helper functions?
+// This impl block contains balance methods and related helper functions
 impl<K> Wallet<K>
 where
     K: Ord + Clone + Debug,
@@ -873,23 +1084,6 @@ where
             |txo| self.is_tx_trusted(txo.outpoint.txid),
         )
     }
-
-    /// Whether the transaction of `txid` is considered trusted by this wallet.
-    ///
-    /// Trust is defined as a tx of which all of the inputs are controlled by the wallet, as we can
-    /// assume it won't be double-spent unintentionally.
-    pub fn is_tx_trusted(&self, txid: Txid) -> bool {
-        let Some(tx) = self.indexed_graph.graph().get_tx(txid) else {
-            return false;
-        };
-        if tx.input.is_empty() {
-            return false;
-        }
-        tx.input.iter().all(|txin| {
-            let outpoint = txin.previous_output;
-            self.indexed_graph.index.txout(outpoint).is_some()
-        })
-    }
 }
 
 // This impl block contains all methods interacting with `Wallet::stage`.
@@ -927,7 +1121,7 @@ where
     }
 }
 
-// This impl block contains methods related to performing a sync/full-scan.
+// This impl block contains methods related to performing spk-based syncing.
 /// Methods to construct sync/full-scan requests for spk-based chain sources.
 impl<K> Wallet<K>
 where
@@ -1041,6 +1235,7 @@ impl Display for ApplyBlockError {
 #[cfg(feature = "std")]
 impl std::error::Error for ApplyBlockError {}
 
+// This impl block contains methods related to performing block by block syncing.
 /// Methods for performing block by block syncing
 impl<K> Wallet<K>
 where
@@ -1181,39 +1376,6 @@ where
 }
 
 // impl Wallet {
-//     /// Finds how the wallet derived the script pubkey `spk`.
-//     ///
-//     /// Will only return `Some(_)` if the wallet has given out the spk.
-//     pub fn derivation_of_spk(&self, spk: ScriptBuf) -> Option<(KeychainKind, u32)> {
-//         self.indexed_graph.index.index_of_spk(spk).cloned()
-//     }
-//     /// Get the [`TxDetails`] of a wallet transaction.
-//     ///
-//     /// If the transaction with txid [`Txid`] cannot be found in the wallet's transactions,
-// `None`     /// is returned.
-//     pub fn tx_details(&self, txid: Txid) -> Option<TxDetails> {
-//         let tx: WalletTx = self.transactions().find(|c| c.tx_node.txid == txid)?;
-
-//         let (sent, received) = self.sent_and_received(&tx.tx_node.tx);
-//         let fee: Option<Amount> = self.calculate_fee(&tx.tx_node.tx).ok();
-//         let fee_rate: Option<FeeRate> = self.calculate_fee_rate(&tx.tx_node.tx).ok();
-//         let balance_delta: SignedAmount = self.indexed_graph.index.net_value(&tx.tx_node.tx, ..);
-//         let chain_position = tx.chain_position;
-
-//         let tx_details: TxDetails = TxDetails {
-//             txid,
-//             received,
-//             sent,
-//             fee,
-//             fee_rate,
-//             balance_delta,
-//             chain_position,
-//             tx: tx.tx_node.tx,
-//         };
-
-//         Some(tx_details)
-//     }
-
 //     /// List all relevant outputs (includes both spent and unspent, confirmed and unconfirmed).
 //     ///
 //     /// To list only unspent outputs (UTXOs), use [`Wallet::list_unspent`] instead.
@@ -1227,11 +1389,6 @@ where
 //                 self.indexed_graph.index.outpoints().iter().cloned(),
 //             )
 //             .map(|((k, i), full_txo)| new_local_utxo(k, i, full_txo))
-//     }
-
-//     /// Get all the checkpoints the wallet is currently storing indexed by height.
-//     pub fn checkpoints(&self) -> CheckPointIter {
-//         self.chain.iter_checkpoints()
 //     }
 
 //     /// Get unbounded script pubkey iterators for both `Internal` and `External` keychains.
@@ -1299,162 +1456,6 @@ where
 //     pub fn insert_txout(&mut self, outpoint: OutPoint, txout: TxOut) {
 //         let additions = self.indexed_graph.insert_txout(outpoint, txout);
 //         self.stage.merge(additions.into());
-//     }
-
-//     /// Calculates the fee of a given transaction. Returns [`Amount::ZERO`] if `tx` is a coinbase
-//     /// transaction.
-//     ///
-//     /// To calculate the fee for a [`Transaction`] with inputs not owned by this wallet you must
-//     /// manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
-//     ///
-//     /// Note `tx` does not have to be in the graph for this to work.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Txid;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let txid:Txid = todo!();
-//     /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     /// let fee = wallet.calculate_fee(&tx).expect("fee");
-//     /// ```
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Psbt;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let mut psbt: Psbt = todo!();
-//     /// let tx = &psbt.clone().extract_tx().expect("tx");
-//     /// let fee = wallet.calculate_fee(tx).expect("fee");
-//     /// ```
-//     /// [`insert_txout`]: Self::insert_txout
-//     pub fn calculate_fee(&self, tx: &Transaction) -> Result<Amount, CalculateFeeError> {
-//         self.indexed_graph.graph().calculate_fee(tx)
-//     }
-
-//     /// Calculate the [`FeeRate`] for a given transaction.
-//     ///
-//     /// To calculate the fee rate for a [`Transaction`] with inputs not owned by this wallet you
-//     /// must manually insert the TxOut(s) into the tx graph using the [`insert_txout`] function.
-//     ///
-//     /// Note `tx` does not have to be in the graph for this to work.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Txid;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let txid:Txid = todo!();
-//     /// let tx = wallet.get_tx(txid).expect("transaction").tx_node.tx;
-//     /// let fee_rate = wallet.calculate_fee_rate(&tx).expect("fee rate");
-//     /// ```
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Psbt;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let mut psbt: Psbt = todo!();
-//     /// let tx = &psbt.clone().extract_tx().expect("tx");
-//     /// let fee_rate = wallet.calculate_fee_rate(tx).expect("fee rate");
-//     /// ```
-//     /// [`insert_txout`]: Self::insert_txout
-//     pub fn calculate_fee_rate(&self, tx: &Transaction) -> Result<FeeRate, CalculateFeeError> {
-//         self.calculate_fee(tx).map(|fee| fee / tx.weight())
-//     }
-
-//     /// Compute the `tx`'s sent and received [`Amount`]s.
-//     ///
-//     /// This method returns a tuple `(sent, received)`. Sent is the sum of the txin amounts
-//     /// that spend from previous txouts tracked by this wallet. Received is the summation
-//     /// of this tx's outputs that send to script pubkeys tracked by this wallet.
-//     ///
-//     /// # Examples
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Txid;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let txid:Txid = todo!();
-//     /// let tx = wallet.get_tx(txid).expect("tx exists").tx_node.tx;
-//     /// let (sent, received) = wallet.sent_and_received(&tx);
-//     /// ```
-//     ///
-//     /// ```rust, no_run
-//     /// # use bitcoin::Psbt;
-//     /// # use bdk_wallet::Wallet;
-//     /// # let mut wallet: Wallet = todo!();
-//     /// # let mut psbt: Psbt = todo!();
-//     /// let tx = &psbt.clone().extract_tx().expect("tx");
-//     /// let (sent, received) = wallet.sent_and_received(tx);
-//     /// ```
-//     pub fn sent_and_received(&self, tx: &Transaction) -> (Amount, Amount) {
-//         self.indexed_graph.index.sent_and_received(tx, ..)
-//     }
-
-//     /// Get a single transaction from the wallet as a [`WalletTx`] (if the transaction exists).
-//     ///
-//     /// `WalletTx` contains the full transaction alongside meta-data such as:
-//     /// * Blocks that the transaction is [`Anchor`]ed in. These may or may not be blocks that
-// exist     ///   in the best chain.
-//     /// * The [`ChainPosition`] of the transaction in the best chain - whether the transaction is
-//     ///   confirmed or unconfirmed. If the transaction is confirmed, the anchor which proves the
-//     ///   confirmation is provided. If the transaction is unconfirmed, the unix timestamp of when
-//     ///   the transaction was last seen in the mempool is provided.
-//     ///
-//     /// ```rust, no_run
-//     /// use bdk_chain::Anchor;
-//     /// use bdk_wallet::{chain::ChainPosition, Wallet};
-//     /// # let wallet: Wallet = todo!();
-//     /// # let my_txid: bitcoin::Txid = todo!();
-//     ///
-//     /// let wallet_tx = wallet.get_tx(my_txid).expect("panic if tx does not exist");
-//     ///
-//     /// // get reference to full transaction
-//     /// println!("my tx: {:#?}", wallet_tx.tx_node.tx);
-//     ///
-//     /// // list all transaction anchors
-//     /// for anchor in wallet_tx.tx_node.anchors {
-//     ///     println!(
-//     ///         "tx is anchored by block of hash {}",
-//     ///         anchor.anchor_block().hash
-//     ///     );
-//     /// }
-//     ///
-//     /// // get confirmation status of transaction
-//     /// match wallet_tx.chain_position {
-//     ///     ChainPosition::Confirmed {
-//     ///         anchor,
-//     ///         transitively: None,
-//     ///     } => println!(
-//     ///         "tx is confirmed at height {}, we know this since {}:{} is in the best chain",
-//     ///         anchor.block_id.height, anchor.block_id.height, anchor.block_id.hash,
-//     ///     ),
-//     ///     ChainPosition::Confirmed {
-//     ///         anchor,
-//     ///         transitively: Some(_),
-//     ///     } => println!(
-//     ///         "tx is an ancestor of a tx anchored in {}:{}",
-//     ///         anchor.block_id.height, anchor.block_id.hash,
-//     ///     ),
-//     ///     ChainPosition::Unconfirmed { first_seen, last_seen } => println!(
-//     ///         "tx is first seen at {:?}, last seen at {:?}, it is unconfirmed as it is not
-// anchored in the best chain",     ///         first_seen, last_seen
-//     ///     ),
-//     /// }
-//     /// ```
-//     ///
-//     /// [`Anchor`]: bdk_chain::Anchor
-//     pub fn get_tx(&self, txid: Txid) -> Option<WalletTx<'_>> {
-//         let graph = self.indexed_graph.graph();
-//         graph
-//             .list_canonical_txs(
-//                 &self.chain,
-//                 self.chain.tip().block_id(),
-//                 CanonicalizationParams::default(),
-//             )
-//             .find(|tx| tx.tx_node.txid == txid)
 //     }
 
 //     /// Array of relevant and canonical transactions in the wallet sorted with a comparator
