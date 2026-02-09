@@ -367,7 +367,7 @@ pub enum CreateWithPersistError<E> {
     Persist(E),
     /// Persister already has wallet data.
     DataAlreadyExists(Box<ChangeSet>),
-    /// Occurs when the loaded changeset cannot construct [`Wallet`].
+    /// Occurs when the provided descriptor(s) cannot construct [`Wallet`].
     Descriptor(DescriptorError),
 }
 
