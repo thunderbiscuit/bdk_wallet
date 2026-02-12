@@ -273,7 +273,7 @@ where
         self,
         changeset: ChangeSet<K>,
     ) -> Result<Option<Wallet<K>>, LoadError<K>> {
-        Wallet::from_changeset(changeset, self)
+        Wallet::load_with_params(changeset, self)
     }
 }
 

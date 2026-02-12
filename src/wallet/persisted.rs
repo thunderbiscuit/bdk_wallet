@@ -196,7 +196,7 @@ where
         params: LoadParams<K>,
     ) -> Result<Option<Self>, LoadWithPersistError<P::Error, K>> {
         let changeset = P::initialize(persister).map_err(LoadWithPersistError::Persist)?;
-        Wallet::from_changeset(changeset, params)
+        Wallet::load_with_params(changeset, params)
             .map(|opt| {
                 opt.map(|inner| PersistedWallet {
                     inner,
@@ -264,7 +264,7 @@ where
         let changeset = P::initialize(persister)
             .await
             .map_err(LoadWithPersistError::Persist)?;
-        Wallet::from_changeset(changeset, params)
+        Wallet::load_with_params(changeset, params)
             .map(|opt| {
                 opt.map(|inner| PersistedWallet {
                     inner,
@@ -339,7 +339,7 @@ pub enum FileStoreError<K: Ord> {
 }
 
 #[cfg(feature = "file_store")]
-impl<K: Ord> core::fmt::Display for FileStoreError<K> {
+impl<K: Ord> fmt::Display for FileStoreError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use core::fmt::Display;
         match self {

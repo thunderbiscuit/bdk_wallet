@@ -278,7 +278,7 @@ where
     }
 
     /// Construct a [`Wallet`] from a [`ChangeSet`]
-    pub fn from_changeset(
+    pub fn load_with_params(
         changeset: ChangeSet<K>,
         params: LoadParams<K>,
     ) -> Result<Option<Self>, LoadError<K>> {
