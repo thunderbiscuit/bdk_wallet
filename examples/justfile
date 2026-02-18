@@ -3,26 +3,48 @@ default_wallet := 'test'
 default_private := 'false'
 default_testdata := 'test_data'
 
-# list of recipes
-default:
-  just --list
+_default:
+  just --list --unsorted
 
-# start regtest bitcoind in default test data directory
+# start a regtest bitcoind instance
+[group('bitcoind_rpc')]
 start:
-    mkdir -p {{default_testdata}}/bitcoind; bitcoind -datadir={{default_testdata}}/bitcoind -regtest -server -fallbackfee=0.0002 -rpcallowip=0.0.0.0/0 -rpcbind=0.0.0.0 -blockfilterindex=1 -peerblockfilters=1 -daemon
-    @echo "Regtest bitcoind process started with PID: $(cat {{default_testdata}}/bitcoind/regtest/bitcoind.pid)"
+    mkdir -p {{default_testdata}}/bitcoind
+    bitcoind \
+        -datadir={{default_testdata}}/bitcoind \
+        -regtest -server -fallbackfee=0.0002 \
+        -rpcallowip=0.0.0.0/0 \
+        -rpcbind=0.0.0.0 \
+        -blockfilterindex=1 \
+        -peerblockfilters=1 \
+        -daemon
+    @echo "started regtest bitcoind with PID $(cat {{default_testdata}}/bitcoind/regtest/bitcoind.pid)"
 
-# stop regtest bitcoind
+# stop the regtest bitcoind instance
+[group('bitcoind_rpc')]
 stop:
-    bitcoin-cli -datadir={{default_testdata}}/bitcoind -regtest stop
+    bitcoin-cli \
+        -datadir={{default_testdata}}/bitcoind \
+        -regtest \
+        stop
 
-# delete all bdk_wallet and bitcoind test data
+# run the bitcoind_rpc example
+[group('bitcoind_rpc')]
+run:
+    cargo run --example bitcoind_rpc -- \
+    "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)" \
+    "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)"
+
+# display help text for the bitcoind_rpc example 
+[group('bitcoind_rpc')]
+help:
+    cargo run --example bitcoind_rpc -- --help
+
+# delete regtest bitcoind and wallet data
+[group('bitcoind_rpc')]
 clean:
     rm -rf {{default_testdata}}
 
-# run the example
-run:
-    cargo run -- "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)" "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)"
 
 # create a regtest wallet
 [group('regtest')]
