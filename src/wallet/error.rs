@@ -106,8 +106,6 @@ where
 
 impl<K> core::error::Error for LoadError<K> where K: Display + Debug {}
 
-// TODO PR #318: I applied the changes in #382 here. Bring back the error if it's needed!
-
 /// Errors returned by miniscript when updating inconsistent PSBTs
 #[derive(Debug, Clone)]
 pub enum MiniscriptPsbtError {
