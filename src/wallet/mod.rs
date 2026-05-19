@@ -359,6 +359,15 @@ where
         &self.keyring
     }
 
+    /// Get the public version of the descriptor for the given `keychain`.
+    ///
+    /// It's the "public" version of the wallet's descriptor, meaning a new descriptor that has
+    /// the same structure but with all secret keys replaced by their corresponding public keys.
+    /// This can be used to build a watch-only version of a wallet.
+    pub fn public_descriptor(&self, keychain: K) -> Option<&ExtendedDescriptor> {
+        self.tx_graph.index.get_descriptor(keychain)
+    }
+
     /// Get a reference to the inner [`TxGraph`].
     pub fn tx_graph(&self) -> &TxGraph<ConfirmationBlockTime> {
         self.tx_graph.graph()
@@ -2113,34 +2122,6 @@ where
 //         &self.secp
 //     }
 
-//     /// The derivation index of this wallet. It will return `None` if it has not derived any
-//     /// addresses. Otherwise, it will return the index of the highest address it has derived.
-//     pub fn derivation_index(&self, keychain: KeychainKind) -> Option<u32> {
-//         self.indexed_graph.index.last_revealed_index(keychain)
-//     }
-
-//     /// The index of the next address that you would get if you were to ask the wallet for a new
-//     /// address.
-//     pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
-//         self.indexed_graph
-//             .index
-//             .next_index(self.map_keychain(keychain))
-//             .expect("keychain must exist")
-//             .0
-//     }
-
-//     /// Informs the wallet that you no longer intend to broadcast a tx that was built from it.
-//     ///
-//     /// It's the "public" version of the wallet's descriptor, meaning a new descriptor that has
-//     /// the same structure but with the all secret keys replaced by their corresponding public
-// key.     /// This can be used to build a watch-only version of a wallet.
-//     pub fn public_descriptor(&self, keychain: KeychainKind) -> &ExtendedDescriptor {
-//         self.indexed_graph
-//             .index
-//             .get_descriptor(self.map_keychain(keychain))
-//             .expect("keychain must exist")
-//     }
-
 //     /// Finalize a PSBT, i.e., for each input determine if sufficient data is available to pass
 //     /// validation and construct the respective `scriptSig` or `scriptWitness`. Please refer to
 //     /// [BIP174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki#Input_Finalizer),
@@ -2262,22 +2243,6 @@ where
 //     /// Return the secp256k1 context used for all signing operations.
 //     pub fn secp_ctx(&self) -> &SecpCtx {
 //         &self.secp
-//     }
-
-//     /// The derivation index of this wallet. It will return `None` if it has not derived any
-//     /// addresses. Otherwise, it will return the index of the highest address it has derived.
-//     pub fn derivation_index(&self, keychain: KeychainKind) -> Option<u32> {
-//         self.indexed_graph.index.last_revealed_index(keychain)
-//     }
-
-//     /// The index of the next address that you would get if you were to ask the wallet for a new
-//     /// address.
-//     pub fn next_derivation_index(&self, keychain: KeychainKind) -> u32 {
-//         self.indexed_graph
-//             .index
-//             .next_index(self.map_keychain(keychain))
-//             .expect("keychain must exist")
-//             .0
 //     }
 
 //     fn get_descriptor_for_txout(&self, txout: &TxOut) -> Option<DerivedDescriptor> {
