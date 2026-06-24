@@ -271,12 +271,12 @@ impl LoadParams {
     }
 
     /// Checks that the provided two-path descriptor matches exactly what is loaded for both the
-    /// external and internal keychains.
+    /// external and internal keychains. Note that you can only use this method with public extended
+    /// keys (`xpub` prefix) to create watch-only wallets.
     ///
-    /// # Note
-    ///
-    /// You must also specify [`extract_keys`](Self::extract_keys) if you wish to add a signer
-    /// for an expected descriptor containing secrets.
+    /// # Errors
+    /// Returns an error if the descriptor is invalid, not a 2-path multipath descriptor, or if
+    /// the descriptor provided contains an extended private key (`xprv` prefix).
     pub fn two_path_descriptor<D>(mut self, expected_descriptor: D) -> Self
     where
         D: IntoWalletDescriptor + Send + Clone + 'static,

@@ -8,7 +8,7 @@ use bdk_chain::{
     keychain_txout::DEFAULT_LOOKAHEAD, ChainPosition, ConfirmationBlockTime, DescriptorExt,
 };
 use bdk_wallet::coin_selection::InsufficientFunds;
-use bdk_wallet::descriptor::IntoWalletDescriptor;
+use bdk_wallet::descriptor::{DescriptorError, IntoWalletDescriptor};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
@@ -450,6 +450,24 @@ fn two_path_descriptor_wallet_persist_and_recover() {
         .unwrap()
         .expect("wallet must exist");
     assert_eq!(loaded.derivation_index(KeychainKind::External), Some(2));
+
+    // A private multipath descriptor can't be converted to a public key, so loading fails.
+    // You get a Miniscript(Unexpected("Can't make an extended private key with multiple paths into
+    // a public key.")) error.
+    let private_two_path_descriptor = get_test_two_path_private_wpkh();
+    let err = Wallet::load()
+        .two_path_descriptor(private_two_path_descriptor)
+        .check_network(Network::Testnet4)
+        .load_wallet(&mut db);
+    assert_matches!(
+        err,
+        Err(LoadWithPersistError::InvalidChangeSet(
+            LoadError::Descriptor(DescriptorError::Miniscript(miniscript::Error::Unexpected(
+                _
+            )))
+        )),
+        "private multipath descriptor should fail with a Miniscript Unexpected error"
+    );
 }
 
 #[test]
