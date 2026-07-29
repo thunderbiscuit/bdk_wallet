@@ -1,11 +1,11 @@
 #![allow(unused)]
-use bdk_esplora::{esplora_client, EsploraExt};
+use bdk_esplora::{EsploraExt, esplora_client};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
+    KeychainKind, LoadParams, PersistedWallet, Wallet,
     bitcoin::{Amount, FeeRate, Network},
     keyring::KeyRing,
     psbt::PsbtUtils,
-    KeychainKind, LoadParams, PersistedWallet, Wallet,
 };
 use std::thread::sleep;
 use std::time::Duration;

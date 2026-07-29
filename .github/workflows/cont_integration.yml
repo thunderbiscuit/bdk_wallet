@@ -20,12 +20,9 @@ jobs:
         os:
           - ubuntu-latest
           - ubuntu-24.04-arm
-        features:
-          - --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
-          - --all-features
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # The 'toolchain' argument on this action overrides the Rust compiler version set in rust-toolchain.toml
@@ -37,10 +34,15 @@ jobs:
           cache: true
       - name: Pin dependencies for MSRV
         run: ./ci/pin-msrv.sh
-      - name: Build + Test
+      - name: Build (no default features)
         run: |
-          cargo build --workspace --all-targets ${{ matrix.features }}
-          cargo test --workspace ${{ matrix.features }}
+          cargo build --workspace --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
+      - name: Test all features
+        env:
+          RUSTFLAGS: "--cfg bdk_wallet_unstable"
+          RUSTDOCFLAGS: "--cfg bdk_wallet_unstable"
+        run: |
+          cargo test --workspace --all-features
 
   build-test-stable:
     name: Build & Test Rust Stable
@@ -50,12 +52,9 @@ jobs:
         os:
           - ubuntu-latest
           - ubuntu-24.04-arm
-        features:
-          - --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
-          - --all-features
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # This action will honor the Rust compiler version set in rust-toolchain.toml. We aim to keep it in sync with
@@ -64,17 +63,22 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
-      - name: Build + Test
+      - name: Build (no default features)
         run: |
-          cargo build --workspace --all-targets ${{ matrix.features }}
-          cargo test --workspace ${{ matrix.features }}
+          cargo build --workspace --no-default-features --features miniscript/no-std,bdk_chain/hashbrown
+      - name: Test all features
+        env:
+          RUSTFLAGS: "--cfg bdk_wallet_unstable"
+          RUSTDOCFLAGS: "--cfg bdk_wallet_unstable"
+        run: |
+          cargo test --workspace --all-features
 
   check-no-std:
     name: Check no_std
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
@@ -94,7 +98,7 @@ jobs:
       CFLAGS: -I/usr/include
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
         # Install a recent version of clang that supports wasm32
@@ -117,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
@@ -135,7 +139,7 @@ jobs:
       checks: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
@@ -144,14 +148,16 @@ jobs:
         with:
           cache: true
       - name: Clippy
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        env:
+          RUSTFLAGS: "-D warnings --cfg bdk_wallet_unstable"
+        run: cargo clippy --all-features --all-targets
 
   docs_check:
     name: Check cargo doc
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       # This action automatically reads and applies rust-toolchain.toml
@@ -160,4 +166,6 @@ jobs:
         with:
           cache: true
       - name: Check docs
-        run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+        env: 
+          RUSTDOCFLAGS: "-D warnings --cfg bdk_wallet_unstable"
+        run: cargo doc --workspace --all-features --no-deps

@@ -1,4 +1,5 @@
 use crate::keyring::BTreeMap;
+use alloc::collections::btree_map::Entry;
 
 use bitcoin::Network;
 use chain::Merge;
@@ -26,11 +27,28 @@ impl<K: Ord> Default for ChangeSet<K> {
 impl<K: Ord> Merge for ChangeSet<K> {
     fn merge(&mut self, other: Self) {
         // merge network
-        if other.network.is_some() && self.network.is_none() {
+        if self.network.is_none() && other.network.is_some() {
             self.network = other.network;
+        } else {
+            debug_assert!(
+                other.network.is_none() || self.network == other.network,
+                "network must never change"
+            );
         }
         // merge descriptors
-        self.descriptors.extend(other.descriptors);
+        for (keychain, descriptor) in other.descriptors {
+            match self.descriptors.entry(keychain) {
+                Entry::Vacant(slot) => {
+                    slot.insert(descriptor);
+                }
+                Entry::Occupied(slot) => {
+                    debug_assert!(
+                        *slot.get() == descriptor,
+                        "descriptor must never change for a given keychain"
+                    );
+                }
+            }
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -40,8 +58,8 @@ impl<K: Ord> Merge for ChangeSet<K> {
 
 #[cfg(feature = "rusqlite")]
 use chain::{
-    rusqlite::{self, types::FromSql, OptionalExtension, ToSql},
     Impl,
+    rusqlite::{self, OptionalExtension, ToSql, types::FromSql},
 };
 
 #[cfg(feature = "rusqlite")]

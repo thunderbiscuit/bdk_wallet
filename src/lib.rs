@@ -20,6 +20,10 @@ pub extern crate alloc;
 pub extern crate bdk_chain as chain;
 #[cfg(feature = "file_store")]
 pub extern crate bdk_file_store as file_store;
+#[cfg(all(feature = "bdk-tx", not(bdk_wallet_unstable)))]
+compile_error!("The `bdk-tx` feature requires `--cfg bdk_wallet_unstable`.");
+#[cfg(all(bdk_wallet_unstable, feature = "bdk-tx"))]
+pub extern crate bdk_tx;
 #[cfg(feature = "keys-bip39")]
 pub extern crate bip39;
 pub extern crate bitcoin;
@@ -45,8 +49,9 @@ pub(crate) use bdk_chain::collections;
 pub use bdk_chain::rusqlite;
 #[cfg(feature = "rusqlite")]
 pub use bdk_chain::rusqlite_impl;
-pub use descriptor::template;
 pub use descriptor::HdKeyPaths;
+pub use descriptor::template;
+pub use psbt::*;
 // pub use signer;
 // pub use signer::SignOptions;
 pub use tx_builder::*;
@@ -55,5 +60,5 @@ pub use wallet::*;
 
 /// Get the version of [`bdk_wallet`](crate) at runtime.
 pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION", "unknown")
+    env!("CARGO_PKG_VERSION")
 }

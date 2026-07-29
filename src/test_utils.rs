@@ -9,8 +9,8 @@ use crate::keyring::KeyRing;
 use crate::{KeychainKind, Update, Wallet};
 use bdk_chain::{BlockId, CheckPoint, ConfirmationBlockTime, TxUpdate};
 use bitcoin::{
-    absolute, hashes::Hash, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint,
-    Transaction, TxIn, TxOut, Txid,
+    Address, Amount, BlockHash, FeeRate, Network, OutPoint, Transaction, TxIn, TxOut, Txid,
+    absolute, hashes::Hash, transaction,
 };
 
 /// Return a fake wallet that appears to be funded for testing.
@@ -155,8 +155,10 @@ pub fn get_test_wpkh() -> &'static str {
 
 /// `wpkh` xpriv and change descriptor
 pub fn get_test_wpkh_and_change_desc() -> (&'static str, &'static str) {
-    ("wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)",
-    "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)")
+    (
+        "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/0/*)",
+        "wpkh(tprv8ZgxMBicQKsPdy6LMhUtFHAgpocR8GC6QmwMSFpZs7h6Eziw3SpThFfczTDh5rW2krkqffa11UpX3XkeTTB2FvzZKWXqPY54Y6Rq4AQ5R8L/84'/1'/0'/1/*)",
+    )
 }
 
 /// `wpkh` two-path descriptor
@@ -213,8 +215,10 @@ pub fn get_test_tr_single_sig_xprv() -> &'static str {
 
 /// taproot xpriv and change descriptor
 pub fn get_test_tr_single_sig_xprv_and_change_desc() -> (&'static str, &'static str) {
-    ("tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/0/*)",
-    "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1/*)")
+    (
+        "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/0/*)",
+        "tr(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1/*)",
+    )
 }
 
 /// taproot descriptor with taptree
@@ -347,6 +351,35 @@ pub fn insert_checkpoint<K: Ord + Clone + fmt::Debug>(wallet: &mut Wallet<K>, bl
             ..Default::default()
         })
         .unwrap();
+}
+
+/// Inserts a transaction to be anchored by `block_id`. This is particularly useful for
+/// adding a coinbase tx to the wallet for testing, since transactions of this kind
+/// must always appear confirmed.
+///
+/// This will also insert the anchor `block_id`. See [`insert_anchor`] for more.
+pub fn insert_tx_anchor<K: Ord + Clone + fmt::Debug>(
+    wallet: &mut Wallet<K>,
+    tx: Transaction,
+    block_id: BlockId,
+) {
+    insert_checkpoint(wallet, block_id);
+    let anchor = ConfirmationBlockTime {
+        block_id,
+        confirmation_time: 1234567000,
+    };
+    let txid = tx.compute_txid();
+
+    let mut tx_update = TxUpdate::default();
+    tx_update.txs = vec![Arc::new(tx)];
+    tx_update.anchors = [(anchor, txid)].into();
+
+    wallet
+        .apply_update(Update {
+            tx_update,
+            ..Default::default()
+        })
+        .expect("failed to apply update");
 }
 
 /// Inserts a transaction into the local view, assuming it is currently present in the mempool.

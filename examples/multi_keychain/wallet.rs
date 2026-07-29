@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::Wallet;
+use bdk_wallet::keyring::KeyRing;
 use bitcoin::Network;
 use miniscript::descriptor::DescriptorType;
 

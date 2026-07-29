@@ -4,20 +4,18 @@ use std::sync::Arc;
 
 use assert_matches::assert_matches;
 use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
+use bdk_wallet::KeychainKind;
 // use bdk_wallet::coin_selection;
-use bdk_wallet::descriptor::{calc_checksum, DescriptorError};
+// use bdk_wallet::coin_selection::InsufficientFunds;
+use bdk_wallet::descriptor::{DescriptorError, IntoWalletDescriptor, calc_checksum};
+// use bdk_wallet::error::CreateTxError;
 use bdk_wallet::keyring::{self, KeyRing};
 use bdk_wallet::psbt::PsbtUtils;
-// use bdk_wallet::signer::{SignOptions, SignerError};
+// use bdk_wallet::signer::{SignOptions, SignerError, SignersContainer};
 use bdk_wallet::test_utils::*;
-use bdk_wallet::KeychainKind;
 use bdk_wallet::{
-    AddressInfo,
-    Balance,
-    // PersistedWallet,
-    Update,
-    Wallet,
-    WalletTx,
+    AddressInfo, Balance, FinalizeInputOutcome, IndexOutOfBoundsError, PersistedWallet, Update,
+    Wallet, WalletTx,
 };
 use bitcoin::constants::COINBASE_MATURITY;
 use bitcoin::hashes::Hash;
@@ -25,11 +23,11 @@ use bitcoin::script::PushBytesBuf;
 use bitcoin::sighash::{EcdsaSighashType, TapSighashType};
 use bitcoin::taproot::TapNodeHash;
 use bitcoin::{
-    absolute, transaction, Address, Amount, BlockHash, FeeRate, Network, OutPoint, ScriptBuf,
-    Sequence, SignedAmount, Transaction, TxIn, TxOut, Txid,
+    Address, Amount, BlockHash, FeeRate, Network, NetworkKind, OutPoint, ScriptBuf, Sequence,
+    SignedAmount, Transaction, TxIn, TxOut, Txid, absolute, transaction,
 };
-use rand::rngs::StdRng;
 use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 use bdk_wallet::test_utils::insert_anchor;
 
@@ -971,10 +969,10 @@ macro_rules! from_str {
 //     use bitcoin::bip32::{DerivationPath, Fingerprint};
 //     use core::str::FromStr;
 
-//     let (mut wallet, _) =
-// get_funded_wallet_single("wpkh([d34db33f/44'/0'/0'
-// ]tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/
-// 0/*)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh([d34db33f/44'/0'/0']tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/0/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder.drain_to(addr.script_pubkey()).drain_wallet();
 //     let psbt = builder.finish().unwrap();
@@ -994,10 +992,9 @@ macro_rules! from_str {
 //     use bitcoin::bip32::{DerivationPath, Fingerprint};
 //     use core::str::FromStr;
 
-//     let (mut wallet, _) =
-// get_funded_wallet_single("wpkh([d34db33f/44'/0'/0'
-// ]tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/
-// 0/*)");
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh([d34db33f/44'/0'/0']tpubDEnoLuPdBep9bzw5LoGYpsxUQYheRQ9gcgrJhJEcdKFB9cWQRyYmkCyRoTqeD4tJYiVVgt6A3rN6rWn9RYhR9sBsGxji29LYWHuKKbdb1ev/0/*)",
+//     );
 
 //     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
@@ -1289,10 +1286,10 @@ macro_rules! from_str {
 
 // #[test]
 // fn test_create_tx_policy_path_ignored_subtree_with_csv() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),
-// or_i(and_v(v:pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:
-// pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))");
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),or_i(and_v(v:
+// pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:
+// pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))",     );
 
 //     let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
 //     let root_id = external_policy.id;
@@ -1314,10 +1311,10 @@ macro_rules! from_str {
 // #[test]
 // fn test_create_tx_global_xpubs_with_origin() {
 //     use bitcoin::bip32;
-//     let (mut wallet, _) =
-// get_funded_wallet_single("wpkh([73756c7f/48'/0'/0'/2'
-// ]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/
-// 0/*)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh([73756c7f/48'/0'/0'/2']tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder
 //         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
@@ -1472,10 +1469,10 @@ macro_rules! from_str {
 // tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3\
 // ")" )]
 // fn test_create_tx_global_xpubs_origin_missing() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/
-// 0/*)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder
 //         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
@@ -1486,10 +1483,10 @@ macro_rules! from_str {
 // #[test]
 // fn test_create_tx_global_xpubs_master_without_origin() {
 //     use bitcoin::bip32;
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tpubD6NzVbkrYhZ4Y55A58Gv9RSNF5hy84b5AJqYy7sCcjFrkcLpPre8kmgfit6kY1Zs3BLgeypTDBZJM222guPpdz7Cup5yzaMu62u7mYGbwFL/
-// 0/*)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tpubD6NzVbkrYhZ4Y55A58Gv9RSNF5hy84b5AJqYy7sCcjFrkcLpPre8kmgfit6kY1Zs3BLgeypTDBZJM222guPpdz7Cup5yzaMu62u7mYGbwFL/0/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder
 //         .add_recipient(addr.script_pubkey(), Amount::from_sat(25_000))
@@ -1540,10 +1537,10 @@ macro_rules! from_str {
 
 // #[test]
 // fn test_sign_single_xprv() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// *)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder.drain_to(addr.script_pubkey()).drain_wallet();
 //     let mut psbt = builder.finish().unwrap();
@@ -1556,11 +1553,63 @@ macro_rules! from_str {
 // }
 
 // #[test]
+// fn test_sign_with_signers() {
+//     let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+//     let (mut wallet, _) = get_funded_wallet(descriptor, change_descriptor);
+//     let (_, external_keymap) = descriptor
+//         .into_wallet_descriptor(wallet.secp_ctx(), NetworkKind::Test)
+//         .unwrap();
+//     let external_signers = SignersContainer::build(
+//         external_keymap,
+//         wallet.public_descriptor(KeychainKind::External),
+//         wallet.secp_ctx(),
+//     );
+//     let (_, internal_keymap) = change_descriptor
+//         .into_wallet_descriptor(wallet.secp_ctx(), NetworkKind::Test)
+//         .unwrap();
+//     let internal_signers = SignersContainer::build(
+//         internal_keymap,
+//         wallet.public_descriptor(KeychainKind::Internal),
+//         wallet.secp_ctx(),
+//     );
+
+//     let latest_block = wallet.latest_checkpoint().block_id();
+//     let internal_addr = wallet.next_unused_address(KeychainKind::Internal);
+//     receive_output_to_address(
+//         &mut wallet,
+//         internal_addr.address,
+//         Amount::from_sat(25_000),
+//         ConfirmationBlockTime {
+//             block_id: latest_block,
+//             confirmation_time: 0,
+//         },
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let mut builder = wallet.build_tx();
+//     builder.drain_to(addr.script_pubkey()).drain_wallet();
+//     let mut psbt = builder.finish().unwrap();
+//     assert_eq!(psbt.inputs.len(), 2);
+
+//     let finalized = wallet
+//         .sign_with_signers(
+//             &mut psbt,
+//             &[&external_signers, &internal_signers],
+//             Default::default(),
+//         )
+//         .unwrap();
+//     assert!(finalized);
+
+//     let extracted = psbt.extract_tx().expect("failed to extract tx");
+//     assert_eq!(extracted.input.len(), 2);
+//     assert!(extracted.input.iter().all(|input| input.witness.len() == 2));
+// }
+
+// #[test]
 // fn test_sign_single_xprv_with_master_fingerprint_and_path() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("wpkh([d34db33f/84h/1h/
-// 0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// *)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh([d34db33f/84h/1h/0h]tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder.drain_to(addr.script_pubkey()).drain_wallet();
 //     let mut psbt = builder.finish().unwrap();
@@ -1574,10 +1623,10 @@ macro_rules! from_str {
 
 // #[test]
 // fn test_sign_single_xprv_bip44_path() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// 44'/0'/0'/0/*)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/44'/0'/0'/0/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder.drain_to(addr.script_pubkey()).drain_wallet();
 //     let mut psbt = builder.finish().unwrap();
@@ -1591,10 +1640,10 @@ macro_rules! from_str {
 
 // #[test]
 // fn test_sign_single_xprv_sh_wpkh() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// sh(wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// *))");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "sh(wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*))",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder.drain_to(addr.script_pubkey()).drain_wallet();
 //     let mut psbt = builder.finish().unwrap();
@@ -1624,10 +1673,10 @@ macro_rules! from_str {
 
 // #[test]
 // fn test_sign_single_xprv_no_hd_keypaths() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// *)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder.drain_to(addr.script_pubkey()).drain_wallet();
 //     let mut psbt = builder.finish().unwrap();
@@ -1643,14 +1692,45 @@ macro_rules! from_str {
 // }
 
 // #[test]
+// fn test_output_redeem_witness_script_populated_automatically() {
+//     let change_desc =
+// "sh(wsh(multi(1,cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW,
+// cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu)))";
+
+//     let (mut wallet, _) = get_funded_wallet(get_test_wpkh(), change_desc);
+//     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+//         .unwrap()
+//         .assume_checked();
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
+//     let psbt = builder.finish().unwrap();
+
+//     let change_output = psbt
+//         .outputs
+//         .iter()
+//         .find(|o| o.redeem_script.is_some() && o.witness_script.is_some())
+//         .expect("change output should have scripts populated automatically by
+// update_output_with_descriptor");
+
+//     let witness_script = change_output.witness_script.as_ref().unwrap();
+//     let expected_redeem = ScriptBuf::new_p2wsh(&witness_script.wscript_hash());
+
+//     assert_eq!(
+//         change_output.redeem_script.as_ref().unwrap(),
+//         &expected_redeem,
+//         "redeem_script should be the P2WSH hash of the witness_script"
+//     );
+// }
+
+// #[test]
 // fn test_signing_only_one_of_multiple_inputs() {
 //     let (mut wallet, _) = get_funded_wallet_wpkh();
 //     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
 //         .unwrap()
 //         .assume_checked();
 //     let mut builder = wallet.build_tx();
-//     builder
-//         .add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(45_000));
 //     let mut psbt = builder.finish().unwrap();
 
 //     // add another input to the psbt that is at least passable.
@@ -1689,10 +1769,9 @@ macro_rules! from_str {
 
 // #[test]
 // fn test_try_finalize_sign_option() {
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// *)");
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
 
 //     for try_finalize in &[true, false] {
 //         let addr = wallet.next_unused_address(KeychainKind::External);
@@ -1721,6 +1800,279 @@ macro_rules! from_str {
 //                 assert!(input.final_script_witness.is_none());
 //             }
 //         });
+//     }
+// }
+
+// #[test]
+// fn test_try_finalize_psbt_outcomes() {
+//     {
+//         let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+//         let addr = wallet.next_unused_address(KeychainKind::External);
+//         let mut builder = wallet.build_tx();
+//         builder.drain_to(addr.script_pubkey()).drain_wallet();
+//         let mut psbt = builder.finish().unwrap();
+
+//         let is_final = wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     try_finalize: false,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap();
+//         assert!(!is_final);
+//         let output_bip32_derivations = psbt
+//             .outputs
+//             .iter()
+//             .map(|output| output.bip32_derivation.clone())
+//             .collect::<Vec<_>>();
+//         assert!(
+//             output_bip32_derivations
+//                 .iter()
+//                 .any(|derivation| !derivation.is_empty()),
+//             "expected wallet-owned outputs to retain derivation data before finalization"
+//         );
+
+//         let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+//         assert!(finalized.is_finalized());
+//         assert_matches!(
+//             finalized.outcomes().get(&0),
+//             Some(FinalizeInputOutcome::Finalized)
+//         );
+//         assert!(
+//             psbt.inputs[0].final_script_sig.is_some()
+//                 || psbt.inputs[0].final_script_witness.is_some()
+//         );
+//         assert_eq!(
+//             psbt.outputs
+//                 .iter()
+//                 .map(|output| output.bip32_derivation.clone())
+//                 .collect::<Vec<_>>(),
+//             output_bip32_derivations
+//         );
+
+//         let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+//         assert!(finalized.is_finalized());
+//         assert_matches!(
+//             finalized.outcomes().get(&0),
+//             Some(FinalizeInputOutcome::AlreadyFinalized)
+//         );
+//     }
+
+//     {
+//         let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+//         let addr = wallet.next_unused_address(KeychainKind::External);
+//         let mut builder = wallet.build_tx();
+//         builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//         let mut psbt = builder.finish().unwrap();
+
+//         let dud_input = bitcoin::psbt::Input {
+//             witness_utxo: Some(TxOut {
+//                 value: Amount::from_sat(100_000),
+//                 script_pubkey: miniscript::Descriptor::<bitcoin::PublicKey>::from_str(
+//                     "wpkh(025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357)",
+//                 )
+//                 .unwrap()
+//                 .script_pubkey(),
+//             }),
+//             ..Default::default()
+//         };
+
+//         psbt.inputs.push(dud_input);
+//         psbt.unsigned_tx.input.push(bitcoin::TxIn::default());
+
+//         let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+//         assert!(!finalized.is_finalized());
+//         assert_matches!(
+//             finalized.outcomes().get(&0),
+//             Some(FinalizeInputOutcome::CouldNotSatisfy(
+//                 bdk_wallet::miniscript::Error::MissingSig(_)
+//             ))
+//         );
+//         assert_matches!(
+//             finalized.outcomes().get(&1),
+//             Some(FinalizeInputOutcome::MissingDescriptor)
+//         );
+//     }
+// }
+
+// #[test]
+// fn test_try_finalize_psbt_preserves_opaque_input_fields() {
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let mut builder = wallet.build_tx();
+//     builder.drain_to(addr.script_pubkey()).drain_wallet();
+//     let mut psbt = builder.finish().unwrap();
+
+//     wallet
+//         .sign(
+//             &mut psbt,
+//             SignOptions {
+//                 try_finalize: false,
+//                 ..Default::default()
+//             },
+//         )
+//         .unwrap();
+
+//     let proprietary_key = bitcoin::psbt::raw::ProprietaryKey {
+//         prefix: b"bdk-test".to_vec(),
+//         subtype: 0,
+//         key: vec![1, 2, 3],
+//     };
+//     let proprietary_value = vec![4, 5, 6];
+//     let unknown_key = bitcoin::psbt::raw::Key {
+//         type_value: 0x42,
+//         key: vec![7, 8, 9],
+//     };
+//     let unknown_value = vec![10, 11, 12];
+
+//     psbt.inputs[0]
+//         .proprietary
+//         .insert(proprietary_key.clone(), proprietary_value.clone());
+//     psbt.inputs[0]
+//         .unknown
+//         .insert(unknown_key.clone(), unknown_value.clone());
+
+//     let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+//     assert!(finalized.is_finalized());
+//     assert_eq!(
+//         psbt.inputs[0].proprietary.get(&proprietary_key),
+//         Some(&proprietary_value)
+//     );
+//     assert_eq!(
+//         psbt.inputs[0].unknown.get(&unknown_key),
+//         Some(&unknown_value)
+//     );
+// }
+
+// #[test]
+// fn test_try_finalize_psbt_returns_index_out_of_bounds_for_malformed_psbt() {
+//     {
+//         let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+//         let addr = wallet.next_unused_address(KeychainKind::External);
+//         let mut builder = wallet.build_tx();
+//         builder.drain_to(addr.script_pubkey()).drain_wallet();
+//         let mut psbt = builder.finish().unwrap();
+
+//         psbt.inputs.clear();
+
+//         let err = wallet.try_finalize_psbt(&mut psbt).unwrap_err();
+
+//         assert_eq!(err, IndexOutOfBoundsError::new(0, 0));
+//     }
+
+//     {
+//         let (mut wallet, _) = get_funded_wallet_single(get_test_wpkh());
+//         let addr = wallet.next_unused_address(KeychainKind::External);
+//         let mut builder = wallet.build_tx();
+//         builder.drain_to(addr.script_pubkey()).drain_wallet();
+//         let mut psbt = builder.finish().unwrap();
+
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     try_finalize: false,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap();
+//         assert!(psbt.inputs[0].final_script_sig.is_none());
+//         assert!(psbt.inputs[0].final_script_witness.is_none());
+
+//         psbt.unsigned_tx
+//             .input
+//             .push(psbt.unsigned_tx.input[0].clone());
+
+//         let err = wallet.try_finalize_psbt(&mut psbt).unwrap_err();
+
+//         assert_eq!(err, IndexOutOfBoundsError::new(1, 1));
+//         assert!(psbt.inputs[0].final_script_sig.is_none());
+//         assert!(psbt.inputs[0].final_script_witness.is_none());
+//     }
+// }
+
+// #[test]
+// fn test_try_finalize_psbt_uses_psbt_timelocks() {
+//     {
+//         let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_cltv());
+//         let addr = wallet.next_unused_address(KeychainKind::External);
+//         let mut builder = wallet.build_tx();
+//         builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//         let mut psbt = builder.finish().unwrap();
+
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     try_finalize: false,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap();
+
+//         let mut valid_psbt = psbt.clone();
+//         assert!(
+//             wallet
+//                 .try_finalize_psbt(&mut valid_psbt)
+//                 .unwrap()
+//                 .is_finalized()
+//         );
+
+//         psbt.unsigned_tx.lock_time = absolute::LockTime::from_height(0).unwrap();
+
+//         let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+//         assert!(!finalized.is_finalized());
+//         assert_matches!(
+//             finalized.outcomes().get(&0),
+//             Some(FinalizeInputOutcome::CouldNotSatisfy(_))
+//         );
+//         assert!(psbt.inputs[0].final_script_sig.is_none());
+//         assert!(psbt.inputs[0].final_script_witness.is_none());
+//     }
+
+//     {
+//         let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_csv());
+//         let addr = wallet.next_unused_address(KeychainKind::External);
+//         let mut builder = wallet.build_tx();
+//         builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//         let mut psbt = builder.finish().unwrap();
+
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     try_finalize: false,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap();
+
+//         let mut valid_psbt = psbt.clone();
+//         assert!(
+//             wallet
+//                 .try_finalize_psbt(&mut valid_psbt)
+//                 .unwrap()
+//                 .is_finalized()
+//         );
+
+//         psbt.unsigned_tx.input[0].sequence = Sequence::MAX;
+
+//         let finalized = wallet.try_finalize_psbt(&mut psbt).unwrap();
+
+//         assert!(!finalized.is_finalized());
+//         assert_matches!(
+//             finalized.outcomes().get(&0),
+//             Some(FinalizeInputOutcome::CouldNotSatisfy(_))
+//         );
+//         assert!(psbt.inputs[0].final_script_sig.is_none());
+//         assert!(psbt.inputs[0].final_script_witness.is_none());
 //     }
 // }
 
@@ -1777,10 +2129,10 @@ macro_rules! from_str {
 // fn test_sign_nonstandard_sighash() {
 //     let sighash = EcdsaSighashType::NonePlusAnyoneCanPay;
 
-//     let (mut wallet, _) =
-// get_funded_wallet_single("
-// wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/
-// *)");     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
 //     let mut builder = wallet.build_tx();
 //     builder
 //         .drain_to(addr.script_pubkey())
@@ -1823,18 +2175,19 @@ macro_rules! from_str {
 
 #[test]
 fn test_unused_address() {
-    let descriptor =
-"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
     let mut wallet = Wallet::create(keyring)
         .create_wallet_no_persist()
         .expect("wallet");
 
     // `list_unused_addresses` should be empty if we haven't revealed any
-    assert!(wallet
-        .list_unused_addresses(KeychainKind::External)
-        .next()
-        .is_none());
+    assert!(
+        wallet
+            .list_unused_addresses(KeychainKind::External)
+            .next()
+            .is_none()
+    );
 
     assert_eq!(
         wallet
@@ -1855,8 +2208,7 @@ fn test_unused_address() {
 
 #[test]
 fn test_next_unused_address() {
-    let descriptor =
-"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
     let mut wallet = Wallet::create(keyring)
         .create_wallet_no_persist()
@@ -1917,8 +2269,7 @@ fn test_next_unused_address() {
 
 #[test]
 fn test_peek_address_at_index() {
-    let descriptor =
-"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let change_descriptor = get_test_wpkh();
     let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
     keyring.add_descriptor(KeychainKind::Internal, change_descriptor);
@@ -1970,8 +2321,7 @@ fn test_peek_address_at_index() {
 
 #[test]
 fn test_peek_address_at_index_not_derivable() {
-    let descriptor =
-"wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/1)";
+    let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/1)";
     let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
     keyring.add_descriptor(KeychainKind::Internal, get_test_wpkh());
     let wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
@@ -2003,8 +2353,7 @@ fn test_peek_address_at_index_not_derivable() {
 
 #[test]
 fn test_returns_index_and_address() {
-    let descriptor =
-        "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
+    let descriptor = "wpkh(tpubEBr4i6yk5nf5DAaJpsi9N2pPYBeJ7fZ5Z9rmN4977iYLCGco1VyjB9tvvuvYtfZzjD5A8igzgw3HeWeeKFmanHYqksqZXYXGsw5zjnj7KM9/*)";
     let mut keyring = KeyRing::new(Network::Testnet, KeychainKind::External, descriptor).unwrap();
     keyring.add_descriptor(KeychainKind::Internal, get_test_wpkh());
     let mut wallet = Wallet::create(keyring).create_wallet_no_persist().unwrap();
@@ -2946,6 +3295,519 @@ bitcoin::bip32::Xpriv::from_str("tprv8ZgxMBicQKsPcx5nBGsR63Pe8KnRUqmbJNENAfGftF3
 //         )
 //         .unwrap();
 
+//     assert!(
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     sign_with_tap_internal_key: false,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap(),
+//         "Unable to finalize tx"
+//     );
+
+//     assert!(psbt.inputs.iter().all(|i| i.tap_key_sig.is_none()));
+// }
+
+// #[test]
+// fn test_taproot_script_spend() {
+//     let (wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree());
+//     test_spend_from_wallet(wallet);
+
+//     let (wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_xprv());
+//     test_spend_from_wallet(wallet);
+// }
+
+// #[test]
+// fn test_taproot_script_spend_sign_all_leaves() {
+//     use bdk_wallet::signer::TapLeavesOptions;
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//     let mut psbt = builder.finish().unwrap();
+
+//     assert!(
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     tap_leaves_options: TapLeavesOptions::All,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap(),
+//         "Unable to finalize tx"
+//     );
+
+//     assert!(
+//         psbt.inputs
+//             .iter()
+//             .all(|i| i.tap_script_sigs.len() == i.tap_scripts.len())
+//     );
+// }
+
+// #[test]
+// fn test_taproot_script_spend_sign_include_some_leaves() {
+//     use bdk_wallet::signer::TapLeavesOptions;
+//     use bitcoin::taproot::TapLeafHash;
+
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//     let mut psbt = builder.finish().unwrap();
+//     let mut script_leaves: Vec<_> = psbt.inputs[0]
+//         .tap_scripts
+//         .clone()
+//         .values()
+//         .map(|(script, version)| TapLeafHash::from_script(script, *version))
+//         .collect();
+//     let included_script_leaves = vec![script_leaves.pop().unwrap()];
+//     let excluded_script_leaves = script_leaves;
+
+//     assert!(
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     tap_leaves_options:
+// TapLeavesOptions::Include(included_script_leaves.clone()),
+// ..Default::default()                 },
+//             )
+//             .unwrap(),
+//         "Unable to finalize tx"
+//     );
+
+//     assert!(psbt.inputs[0].tap_script_sigs.iter().all(
+//         |s| included_script_leaves.contains(&s.0.1) && !excluded_script_leaves.contains(&s.0.1)
+//     ));
+// }
+
+// #[test]
+// fn test_taproot_script_spend_sign_exclude_some_leaves() {
+//     use bdk_wallet::signer::TapLeavesOptions;
+//     use bitcoin::taproot::TapLeafHash;
+
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//     let mut psbt = builder.finish().unwrap();
+//     let mut script_leaves: Vec<_> = psbt.inputs[0]
+//         .tap_scripts
+//         .clone()
+//         .values()
+//         .map(|(script, version)| TapLeafHash::from_script(script, *version))
+//         .collect();
+//     let included_script_leaves = [script_leaves.pop().unwrap()];
+//     let excluded_script_leaves = script_leaves;
+
+//     assert!(
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     tap_leaves_options:
+// TapLeavesOptions::Exclude(excluded_script_leaves.clone()),
+// ..Default::default()                 },
+//             )
+//             .unwrap(),
+//         "Unable to finalize tx"
+//     );
+
+//     assert!(psbt.inputs[0].tap_script_sigs.iter().all(
+//         |s| included_script_leaves.contains(&s.0.1) && !excluded_script_leaves.contains(&s.0.1)
+//     ));
+// }
+
+// #[test]
+// fn test_taproot_script_spend_sign_no_leaves() {
+//     use bdk_wallet::signer::TapLeavesOptions;
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_with_taptree_both_priv());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//     let mut psbt = builder.finish().unwrap();
+
+//     wallet
+//         .sign(
+//             &mut psbt,
+//             SignOptions {
+//                 tap_leaves_options: TapLeavesOptions::None,
+//                 ..Default::default()
+//             },
+//         )
+//         .unwrap();
+
+//     assert!(psbt.inputs.iter().all(|i| i.tap_script_sigs.is_empty()));
+// }
+
+// #[test]
+// fn test_taproot_sign_derive_index_from_psbt() {
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig_xprv());
+
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(addr.script_pubkey(), Amount::from_sat(25_000));
+//     let mut psbt = builder.finish().unwrap();
+
+//     // re-create the wallet with an empty db
+//     let wallet_empty = Wallet::create(get_test_tr_single_sig_xprv(), get_test_tr_single_sig())
+//         .network(Network::Regtest)
+//         .create_wallet_no_persist()
+//         .unwrap();
+
+//     // signing with an empty db means that we will only look at the psbt to infer the
+//     // derivation index
+//     assert!(
+//         wallet_empty.sign(&mut psbt, Default::default()).unwrap(),
+//         "Unable to finalize tx"
+//     );
+// }
+
+// #[test]
+// fn test_taproot_sign_explicit_sighash_all() {
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let mut builder = wallet.build_tx();
+//     builder
+//         .drain_to(addr.script_pubkey())
+//         .sighash(TapSighashType::All.into())
+//         .drain_wallet();
+//     let mut psbt = builder.finish().unwrap();
+
+//     let result = wallet.sign(&mut psbt, Default::default());
+//     assert!(
+//         result.is_ok(),
+//         "Signing should work because SIGHASH_ALL is safe"
+//     )
+// }
+
+// #[test]
+// fn test_taproot_sign_non_default_sighash() {
+//     let sighash = TapSighashType::NonePlusAnyoneCanPay;
+
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_tr_single_sig());
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let mut builder = wallet.build_tx();
+//     builder
+//         .drain_to(addr.script_pubkey())
+//         .sighash(sighash.into())
+//         .drain_wallet();
+//     let mut psbt = builder.finish().unwrap();
+
+//     let witness_utxo = psbt.inputs[0].witness_utxo.take();
+
+//     let result = wallet.sign(&mut psbt, Default::default());
+//     assert!(
+//         result.is_err(),
+//         "Signing should have failed because the TX uses non-standard sighashes"
+//     );
+//     assert_matches!(
+//         result,
+//         Err(SignerError::NonStandardSighash),
+//         "Signing failed with the wrong error type"
+//     );
+
+//     // try again after opting-in
+//     let result = wallet.sign(
+//         &mut psbt,
+//         SignOptions {
+//             allow_all_sighashes: true,
+//             ..Default::default()
+//         },
+//     );
+//     assert!(
+//         result.is_err(),
+//         "Signing should have failed because the witness_utxo is missing"
+//     );
+//     assert_matches!(
+//         result,
+//         Err(SignerError::MissingWitnessUtxo),
+//         "Signing failed with the wrong error type"
+//     );
+
+//     // restore the witness_utxo
+//     psbt.inputs[0].witness_utxo = witness_utxo;
+
+//     let result = wallet.sign(
+//         &mut psbt,
+//         SignOptions {
+//             allow_all_sighashes: true,
+//             ..Default::default()
+//         },
+//     );
+
+//     assert!(result.is_ok(), "Signing should have worked");
+//     assert!(
+//         result.unwrap(),
+//         "Should finalize the input since we can produce signatures"
+//     );
+
+//     let extracted = psbt.extract_tx().expect("failed to extract tx");
+//     assert_eq!(
+//         *extracted.input[0].witness.to_vec()[0].last().unwrap(),
+//         sighash as u8,
+//         "The signature should have been made with the right sighash"
+//     );
+// }
+
+// #[test]
+// fn test_spend_coinbase() {
+//     let (desc, change_desc) = get_test_wpkh_and_change_desc();
+//     let mut wallet = Wallet::create(desc, change_desc)
+//         .network(Network::Regtest)
+//         .create_wallet_no_persist()
+//         .unwrap();
+
+//     let confirmation_height = 5;
+//     let confirmation_block_id = BlockId {
+//         height: confirmation_height,
+//         hash: BlockHash::all_zeros(),
+//     };
+//     insert_checkpoint(&mut wallet, confirmation_block_id);
+//     let coinbase_tx = Transaction {
+//         version: transaction::Version::ONE,
+//         lock_time: absolute::LockTime::ZERO,
+//         input: vec![TxIn {
+//             previous_output: OutPoint::null(),
+//             ..Default::default()
+//         }],
+//         output: vec![TxOut {
+//             script_pubkey: wallet
+//                 .next_unused_address(KeychainKind::External)
+//                 .script_pubkey(),
+//             value: Amount::from_sat(25_000),
+//         }],
+//     };
+//     let txid = coinbase_tx.compute_txid();
+
+//     let anchor = ConfirmationBlockTime {
+//         block_id: confirmation_block_id,
+//         confirmation_time: 30_000,
+//     };
+
+//     // Insert coinbase transaction into the local view, and also simulates confirming tx by
+// applying     // the update with an `anchor`.
+//     let mut tx_update = bdk_chain::TxUpdate::default();
+//     tx_update.txs = vec![Arc::new(coinbase_tx)];
+//     tx_update.anchors = [(anchor, txid)].into();
+//     wallet
+//         .apply_update(Update {
+//             tx_update,
+//             ..Default::default()
+//         })
+//         .unwrap();
+
+//     // NOTE: A transaction spending an output coming from the coinbase tx at height h, is
+// eligible     // to be included in block h + [100 = COINBASE_MATURITY] or higher.
+//     // Tx elibible to be included in the next block will be accepted in the mempool, used in
+// block     // templates and relayed on the network.
+//     // Miners may include such tx in a block when their chaintip is at h + [99 =
+// COINBASE_MATURITY -     // 1]. This means these coins are available for selection at height h +
+// 99. // // By https://bitcoin.stackexchange.com/a/119017 let not_yet_mature_time =
+//     confirmation_height + COINBASE_MATURITY - 2; let maturity_time = confirmation_height +
+//     COINBASE_MATURITY - 1;
+
+//     let balance = wallet.balance();
+//     assert_eq!(
+//         balance,
+//         Balance {
+//             immature: Amount::from_sat(25_000),
+//             trusted_pending: Amount::ZERO,
+//             untrusted_pending: Amount::ZERO,
+//             confirmed: Amount::ZERO
+//         }
+//     );
+
+//     // We try to create a transaction, only to notice that all
+//     // our funds are unspendable
+//     let addr = Address::from_str("2N1Ffz3WaNzbeLFBb51xyFMHYSEUXcbiSoX")
+//         .unwrap()
+//         .assume_checked();
+//     let mut builder = wallet.build_tx();
+//     builder
+//         .add_recipient(addr.script_pubkey(), balance.immature / 2)
+//         .current_height(confirmation_height);
+//     assert!(matches!(
+//         builder.finish(),
+//         Err(CreateTxError::CoinSelection(
+//             coin_selection::InsufficientFunds {
+//                 needed: _,
+//                 available: Amount::ZERO
+//             }
+//         ))
+//     ));
+
+//     // Still unspendable...
+//     let mut builder = wallet.build_tx();
+//     builder
+//         .add_recipient(addr.script_pubkey(), balance.immature / 2)
+//         .current_height(not_yet_mature_time);
+//     assert_matches!(
+//         builder.finish(),
+//         Err(CreateTxError::CoinSelection(
+//             coin_selection::InsufficientFunds {
+//                 needed: _,
+//                 available: Amount::ZERO
+//             }
+//         ))
+//     );
+
+//     insert_checkpoint(
+//         &mut wallet,
+//         BlockId {
+//             height: maturity_time,
+//             hash: BlockHash::all_zeros(),
+//         },
+//     );
+//     let balance = wallet.balance();
+//     assert_eq!(
+//         balance,
+//         Balance {
+//             immature: Amount::ZERO,
+//             trusted_pending: Amount::ZERO,
+//             untrusted_pending: Amount::ZERO,
+//             confirmed: Amount::from_sat(25_000)
+//         }
+//     );
+//     let mut builder = wallet.build_tx();
+//     builder
+//         .add_recipient(addr.script_pubkey(), balance.confirmed / 2)
+//         .current_height(maturity_time);
+//     builder.finish().unwrap();
+// }
+
+// #[test]
+// fn test_allow_dust_limit() {
+//     let (mut wallet, _) = get_funded_wallet_single(get_test_single_sig_cltv());
+
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+
+//     builder.add_recipient(addr.script_pubkey(), Amount::ZERO);
+
+//     assert_matches!(
+//         builder.finish(),
+//         Err(CreateTxError::OutputBelowDustLimit(0))
+//     );
+
+//     let mut builder = wallet.build_tx();
+
+//     builder
+//         .allow_dust(true)
+//         .add_recipient(addr.script_pubkey(), Amount::ZERO);
+
+//     assert!(builder.finish().is_ok());
+// }
+
+// #[test]
+// fn test_fee_rate_sign_no_grinding_high_r() {
+//     // Our goal is to obtain a transaction with a signature with high-R (71 bytes
+//     // instead of 70). We then check that our fee rate and fee calculation is
+//     // alright.
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let fee_rate = FeeRate::from_sat_per_vb_u32(1);
+//     let mut builder = wallet.build_tx();
+//     let mut data = PushBytesBuf::try_from(vec![0]).unwrap();
+//     builder
+//         .drain_to(addr.script_pubkey())
+//         .drain_wallet()
+//         .fee_rate(fee_rate)
+//         .add_data(&data);
+//     let mut psbt = builder.finish().unwrap();
+//     let fee = check_fee!(wallet, psbt);
+//     let (op_return_vout, _) = psbt
+//         .unsigned_tx
+//         .output
+//         .iter()
+//         .enumerate()
+//         .find(|(_n, i)| i.script_pubkey.is_op_return())
+//         .unwrap();
+
+//     let mut sig_len: usize = 0;
+//     // We try to sign many different times until we find a longer signature (71 bytes)
+//     while sig_len < 71 {
+//         // Changing the OP_RETURN data will make the signature change (but not the fee, until
+//         // data[0] is small enough)
+//         data.as_mut_bytes()[0] += 1;
+//         psbt.unsigned_tx.output[op_return_vout].script_pubkey = ScriptBuf::new_op_return(&data);
+//         // Clearing the previous signature
+//         psbt.inputs[0].partial_sigs.clear();
+//         // Signing
+//         wallet
+//             .sign(
+//                 &mut psbt,
+//                 SignOptions {
+//                     try_finalize: false,
+//                     allow_grinding: false,
+//                     ..Default::default()
+//                 },
+//             )
+//             .unwrap();
+//         // We only have one key in the partial_sigs map, this is a trick to retrieve it
+//         let key = psbt.inputs[0].partial_sigs.keys().next().unwrap();
+//         sig_len = psbt.inputs[0].partial_sigs[key]
+//             .signature
+//             .serialize_der()
+//             .len();
+//     }
+//     // Actually finalizing the transaction...
+//     wallet
+//         .sign(
+//             &mut psbt,
+//             SignOptions {
+//                 allow_grinding: false,
+//                 ..Default::default()
+//             },
+//         )
+//         .unwrap();
+//     // ...and checking that everything is fine
+//     assert_fee_rate!(psbt, fee, fee_rate);
+// }
+
+// #[test]
+// fn test_fee_rate_sign_grinding_low_r() {
+//     // Our goal is to obtain a transaction with a signature with low-R (70 bytes)
+//     // by setting the `allow_grinding` signing option as true.
+//     // We then check that our fee rate and fee calculation is alright and that our
+//     // signature is 70 bytes.
+//     let (mut wallet, _) = get_funded_wallet_single(
+//         "wpkh(tprv8ZgxMBicQKsPd3EupYiPRhaMooHKUHJxNsTfYuScep13go8QFfHdtkG9nRkFGb7busX4isf6X9dURGCoKgitaApQ6MupRhZMcELAxTBRJgS/*)",
+//     );
+//     let addr = wallet.next_unused_address(KeychainKind::External);
+//     let fee_rate = FeeRate::from_sat_per_vb_u32(1);
+//     let mut builder = wallet.build_tx();
+//     builder
+//         .drain_to(addr.script_pubkey())
+//         .drain_wallet()
+//         .fee_rate(fee_rate);
+//     let mut psbt = builder.finish().unwrap();
+//     let fee = check_fee!(wallet, psbt);
+
+//     wallet
+//         .sign(
+//             &mut psbt,
+//             SignOptions {
+//                 try_finalize: false,
+//                 allow_grinding: true,
+//                 ..Default::default()
+//             },
+//         )
+//         .unwrap();
+
 //     let key = psbt.inputs[0].partial_sigs.keys().next().unwrap();
 //     let sig_len = psbt.inputs[0].partial_sigs[key]
 //         .signature
@@ -2989,10 +3851,8 @@ fn test_keychains_with_overlapping_spks() {
     // wildcard descriptor keychain in the same wallet also derives.
 
     // index 1 spk overlaps with non-wildcard change descriptor
-    let wildcard_keychain =
-"wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/*)";
-    let non_wildcard_keychain =
-"wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1)";
+    let wildcard_keychain = "wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/*)";
+    let non_wildcard_keychain = "wpkh(tprv8ZgxMBicQKsPdDArR4xSAECuVxeX1jwwSXR4ApKbkYgZiziDc4LdBy2WvJeGDfUSE4UT4hHhbgEwbdq8ajjUHiKDegkwrNU6V55CxcxonVN/1)";
 
     let (mut wallet, _) = get_funded_wallet(wildcard_keychain, non_wildcard_keychain);
     assert_eq!(wallet.balance().confirmed, Amount::from_sat(50000));
@@ -3111,17 +3971,21 @@ fn test_keychains_with_overlapping_spks() {
 //         .count();
 
 //     assert_eq!(relevant_tx_count_before, relevant_tx_count_after);
-//     assert!(!test_wallet
-//         .transactions()
-//         .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
-//     assert!(test_wallet
-//         .tx_graph()
-//         .list_canonical_txs(
-//             test_wallet.local_chain(),
-//             chain_tip,
-//             CanonicalizationParams::default()
-//         )
-//         .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid));
+//     assert!(
+//         !test_wallet
+//             .transactions()
+//             .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid)
+//     );
+//     assert!(
+//         test_wallet
+//             .tx_graph()
+//             .list_canonical_txs(
+//                 test_wallet.local_chain(),
+//                 chain_tip,
+//                 CanonicalizationParams::default()
+//             )
+//             .any(|wallet_tx| wallet_tx.tx_node.txid == other_txid)
+//     );
 //     assert!(full_tx_count_before < full_tx_count_after);
 //     assert!(canonical_tx_count_before < canonical_tx_count_after);
 // }
@@ -3258,4 +4122,145 @@ fn test_keychains_with_overlapping_spks() {
 //         vec![outpoint_0, outpoint_1],
 //         "UTXOs should be ordered with required first, then selected"
 //     );
+// }
+
+// #[test]
+// fn test_create_and_spend_from_truc_tx() -> anyhow::Result<()> {
+//     let (descriptor, change_descriptor) = get_test_wpkh_and_change_desc();
+//     let mut wallet = Wallet::create(descriptor, change_descriptor)
+//         .network(Network::Regtest)
+//         .create_wallet_no_persist()
+//         .expect("should create wallet successfully!");
+
+//     // establish a chain tip so confirmed funds can be anchored to a block in the active chain.
+//     let block = BlockId {
+//         height: 1_000,
+//         hash: BlockHash::all_zeros(),
+//     };
+//     insert_checkpoint(&mut wallet, block);
+//     let anchor = ConfirmationBlockTime {
+//         block_id: block,
+//         confirmation_time: 0,
+//     };
+
+//     // add funds to the wallet (two 250k sats confirmed UTXOs)
+//     receive_output(&mut wallet, Amount::from_sat(250_000), anchor);
+//     receive_output(&mut wallet, Amount::from_sat(250_000), anchor);
+
+//     let balance = wallet.balance();
+//     assert_eq!(
+//         balance.total(),
+//         Amount::from_sat(500_000),
+//         "wallet balance SHOULD be 500K after funding"
+//     );
+
+//     // Should be able to create TRUC (v3) transactions.
+//     // NOTE: "A TRUC transaction can spend outputs from confirmed non-TRUC transactions. A
+// non-TRUC     // transaction can spend outputs from confirmed TRUC transactions" See, rule #2: https://github.com/bitcoin/bips/blob/master/bip-0431.mediawiki#specification
+
+//     // create txA (TRUC)
+//     let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(125_000));
+//     builder.version(3);
+
+//     let mut psbt = builder.finish().expect("should create txA (TRUC) successfully! as per BIP-431
+// it can spend confirmed outputs from non-TRUC txs.");
+
+//     let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+//     let tx_a = psbt.extract_tx()?;
+//     let txid_a = tx_a.compute_txid();
+
+//     // "broadcast" txA (TRUC): insert it into the wallet's local view as an unconfirmed tx.
+//     insert_tx(&mut wallet, tx_a);
+
+//     let balance = wallet.balance();
+//     assert_eq!(
+//         balance.untrusted_pending,
+//         Amount::from_sat(125_000),
+//         "wallet balance SHOULD have 125K unconfirmed (TRUC) UTXO after txA!"
+//     );
+
+//     // create txB (non-TRUC)
+//     let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(125_000));
+
+//     let mut psbt = builder
+//         .finish()
+//         .expect("SHOULD create txB (non-TRUC) successfully! However, a non-TRUC transaction can
+// only spend confirmed outputs from TRUC transactions");
+
+//     let _ = wallet.sign(&mut psbt, SignOptions::default());
+//     let tx_b = psbt.extract_tx()?;
+
+//     // txB MUST NOT use the available unconfirmed TRUC UTXO.
+//     assert!(
+//         tx_b.input
+//             .iter()
+//             .all(|txin| txin.previous_output.txid.ne(&txid_a)),
+//         "SHOULD NOT try to spend an unconfirmed TRUC output in a non-TRUC tx!"
+//     );
+
+//     // "broadcast" txB (non-TRUC)
+//     let txid_b = tx_b.compute_txid();
+//     insert_tx(&mut wallet, tx_b);
+
+//     let balance = wallet.balance();
+//     assert_eq!(
+//         balance.untrusted_pending,
+//         Amount::from_sat(250_000),
+//         "wallet balance SHOULD have 250K unconfirmed, both non-TRUC (txB) and TRUC (txA) UTXOs
+// after txB!"     );
+
+//     // create txC (TRUC)
+//     let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(200_000));
+//     builder.version(3);
+
+//     let mut psbt = builder.finish().expect("should create txC (TRUC) successfully! as per BIP-431
+// it can spend unconfirmed outputs from TRUC txs.");
+
+//     let _ = wallet.sign(&mut psbt, SignOptions::default())?;
+//     let tx_c = psbt.extract_tx()?;
+
+//     // txC MUST ONLY use the available confirmed UTXOs AND/OR unconfirmed TRUC UTXOs.
+//     assert!(
+//         tx_c.input
+//             .iter()
+//             .all(|txin| txin.previous_output.txid.ne(&txid_b)),
+//         "SHOULD NOT try to spend an unconfirmed non-TRUC output in a TRUC tx!"
+//     );
+
+//     // "broadcast" txC (TRUC)
+//     insert_tx(&mut wallet, tx_c);
+
+//     let balance = wallet.balance();
+//     assert_eq!(
+//         balance.untrusted_pending,
+//         Amount::from_sat(325_000),
+//         "wallet balance SHOULD have 325K unconfirmed UTXOs after txC!"
+//     );
+
+//     // create txD (non-TRUC)
+//     let recv_addr = wallet.next_unused_address(KeychainKind::External);
+
+//     let mut builder = wallet.build_tx();
+//     builder.add_recipient(recv_addr.script_pubkey(), Amount::from_sat(400_000));
+
+//     let psbt = builder.finish();
+
+//     assert!(
+//         matches!(
+//             psbt,
+//             Err(CreateTxError::CoinSelection(InsufficientFunds { .. }))
+//         ),
+//         "SHOULD fail if it's trying to spend an unconfirmed TRUC output in a non-TRUC tx!"
+//     );
+
+//     Ok(())
 // }

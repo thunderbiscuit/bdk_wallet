@@ -28,13 +28,13 @@ pub use changeset::ChangeSet;
 pub use error::KeyRingError;
 
 use crate::chain::{DescriptorExt, Merge};
-use crate::descriptor::check_wallet_descriptor;
 use crate::descriptor::IntoWalletDescriptor;
+use crate::descriptor::check_wallet_descriptor;
 use crate::wallet::DescriptorToExtract;
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::Network;
+use bitcoin::secp256k1::{All, Secp256k1};
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 /// KeyRing.

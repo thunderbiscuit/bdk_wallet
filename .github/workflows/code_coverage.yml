@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Install Rust toolchain
@@ -31,13 +31,13 @@ jobs:
       - name: Generate coverage data
         run: cargo llvm-cov --all-features --branch --quiet --ignore-filename-regex "test_utils" --lcov --output-path lcov.info
         env:
-          RUSTFLAGS: "--cfg coverage_nightly"
+          RUSTFLAGS: "--cfg coverage_nightly --cfg bdk_wallet_unstable"
       - name: Generate HTML coverage report
         run: cargo llvm-cov --all-features --branch --quiet --ignore-filename-regex "test_utils" --html
         env:
-          RUSTFLAGS: "--cfg coverage_nightly"
+          RUSTFLAGS: "--cfg coverage_nightly --cfg bdk_wallet_unstable"
       - name: Codecov upload
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           files: ./lcov.info
           flags: rust

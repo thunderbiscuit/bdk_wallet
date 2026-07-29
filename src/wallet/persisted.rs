@@ -14,7 +14,7 @@ use crate::descriptor;
 use crate::descriptor::DescriptorError;
 use crate::error::LoadError;
 use crate::keyring::{KeyRing, KeyRingError};
-use crate::{descriptor::calc_checksum, keyring, ChangeSet, CreateParams, LoadParams, Wallet};
+use crate::{ChangeSet, CreateParams, LoadParams, Wallet, descriptor::calc_checksum, keyring};
 use bitcoin::BlockHash;
 
 /// Trait that persists [`PersistedWallet`].

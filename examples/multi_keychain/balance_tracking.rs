@@ -1,8 +1,8 @@
 // This example demonstrates how to track balances across different keychains.
 // This is useful if users want to query the balances of different keychains within a single wallet.
 
-use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::Wallet;
+use bdk_wallet::keyring::KeyRing;
 use bitcoin::Network;
 use std::collections::BTreeMap;
 

@@ -8,103 +8,6 @@
 // // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your option.
 // // You may not use this file except in accordance with one or both of these
 // // licenses.
-//
-// //! Coin selection
-// //!
-// //! This module provides the trait [`CoinSelectionAlgorithm`] that can be implemented to
-// //! define custom coin selection algorithms.
-// //!
-// //! You can specify a custom coin selection algorithm through the [`coin_selection`] method on
-// //! [`TxBuilder`]. [`DefaultCoinSelectionAlgorithm`] aliases the coin selection algorithm that
-// will //! be used if it is not explicitly set.
-// //!
-// //! [`TxBuilder`]: super::tx_builder::TxBuilder
-// //! [`coin_selection`]: super::tx_builder::TxBuilder::coin_selection
-// //! ## Example
-// //!
-// //! ```
-// //! # use std::str::FromStr;
-// //! # use bitcoin::*;
-// //! # use bdk_wallet::{self, ChangeSet, coin_selection::*, coin_selection};
-// //! # use bdk_wallet::error::CreateTxError;
-// //! # use bdk_wallet::*;
-// //! # use bdk_wallet::coin_selection::decide_change;
-// //! # use anyhow::Error;
-// //! # use rand_core::RngCore;
-// //! #[derive(Debug)]
-// //! struct AlwaysSpendEverything;
-// //!
-// //! impl CoinSelectionAlgorithm for AlwaysSpendEverything {
-// //!     fn coin_select<R: RngCore>(
-// //!         &self,
-// //!         required_utxos: Vec<WeightedUtxo>,
-// //!         optional_utxos: Vec<WeightedUtxo>,
-// //!         fee_rate: FeeRate,
-// //!         target_amount: Amount,
-// //!         drain_script: &Script,
-// //!         rand: &mut R,
-// //!     ) -> Result<CoinSelectionResult, coin_selection::InsufficientFunds> {
-// //!         let mut selected_amount = Amount::ZERO;
-// //!         let mut additional_weight = Weight::ZERO;
-// //!         let all_utxos_selected = required_utxos
-// //!             .into_iter()
-// //!             .chain(optional_utxos)
-// //!             .scan(
-// //!                 (&mut selected_amount, &mut additional_weight),
-// //!                 |(selected_amount, additional_weight), weighted_utxo| {
-// //!                     **selected_amount += weighted_utxo.utxo.txout().value;
-// //!                     **additional_weight += TxIn::default()
-// //!                         .segwit_weight()
-// //!                         .checked_add(weighted_utxo.satisfaction_weight)
-// //!                         .expect("`Weight` addition should not cause an integer overflow");
-// //!                     Some(weighted_utxo.utxo)
-// //!                 },
-// //!             )
-// //!             .collect::<Vec<_>>();
-// //!         let additional_fees = fee_rate * additional_weight;
-// //!         let amount_needed_with_fees = additional_fees + target_amount;
-// //!         if selected_amount < amount_needed_with_fees {
-// //!             return Err(coin_selection::InsufficientFunds {
-// //!                 needed: amount_needed_with_fees,
-// //!                 available: selected_amount,
-// //!             });
-// //!         }
-// //!
-// //!         let remaining_amount = selected_amount - amount_needed_with_fees;
-// //!
-// //!         let excess = decide_change(remaining_amount, fee_rate, drain_script);
-// //!
-// //!         Ok(CoinSelectionResult {
-// //!             selected: all_utxos_selected,
-// //!             fee_amount: additional_fees,
-// //!             excess,
-// //!         })
-// //!     }
-// //! }
-// //!
-// //! # let mut wallet = doctest_wallet!();
-// //! // create wallet, sync, ...
-// //!
-// //! let to_address = Address::from_str("2N4eQYCbKUHCCTUjBJeHcJp9ok6J2GZsTDt")
-// //!     .unwrap()
-// //!     .require_network(Network::Testnet)
-// //!     .unwrap();
-// //! let psbt = {
-// //!     let mut builder = wallet.build_tx().coin_selection(AlwaysSpendEverything);
-// //!     builder.add_recipient(to_address.script_pubkey(), Amount::from_sat(50_000));
-// //!     builder.finish()?
-// //! };
-// //!
-// //! // inspect, sign, broadcast, ...
-// //!
-// //! # Ok::<(), anyhow::Error>(())
-// //! ```
-//
-// // This file is licensed under the Apache License, Version 2.0 <LICENSE-APACHE
-// // or http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
-// // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your option.
-// // You may not use this file except in accordance with one or both of these
-// // licenses.
 
 // //! Coin selection
 // //!
@@ -198,14 +101,14 @@
 // //! # Ok::<(), anyhow::Error>(())
 // //! ```
 
-// use crate::wallet::utils::IsDust;
 // use crate::Utxo;
 // use crate::WeightedUtxo;
+// use crate::wallet::utils::IsDust;
 // use bitcoin::{Amount, FeeRate, SignedAmount};
 
 // use alloc::vec::Vec;
-// use bitcoin::consensus::encode::serialize;
 // use bitcoin::TxIn;
+// use bitcoin::consensus::encode::serialize;
 // use bitcoin::{Script, Weight};
 
 // use core::convert::TryInto;
@@ -423,17 +326,16 @@
 //     drain_script: &Script,
 // ) -> Result<CoinSelectionResult, InsufficientFunds> {
 //     let mut selected_amount = Amount::ZERO;
-//     let mut fee_amount = Amount::ZERO;
+//     let mut total_weight = Weight::ZERO;
 //     let selected = utxos
 //         .scan(
-//             (&mut selected_amount, &mut fee_amount),
-//             |(selected_amount, fee_amount), (must_use, weighted_utxo)| {
-//                 if must_use || **selected_amount < target_amount + **fee_amount {
-//                     **fee_amount += fee_rate
-//                         * TxIn::default()
-//                             .segwit_weight()
-//                             .checked_add(weighted_utxo.satisfaction_weight)
-//                             .expect("`Weight` addition should not cause an integer overflow");
+//             (&mut selected_amount, &mut total_weight),
+//             |(selected_amount, total_weight), (must_use, weighted_utxo)| {
+//                 if must_use || **selected_amount < target_amount + fee_rate * **total_weight {
+//                     **total_weight += TxIn::default()
+//                         .segwit_weight()
+//                         .checked_add(weighted_utxo.satisfaction_weight)
+//                         .expect("`Weight` addition should not cause an integer overflow");
 //                     **selected_amount += weighted_utxo.utxo.txout().value;
 //                     Some(weighted_utxo.utxo)
 //                 } else {
@@ -443,6 +345,7 @@
 //         )
 //         .collect::<Vec<_>>();
 
+//     let fee_amount = fee_rate * total_weight;
 //     let amount_needed_with_fees = target_amount + fee_amount;
 //     if selected_amount < amount_needed_with_fees {
 //         return Err(InsufficientFunds {
@@ -825,7 +728,7 @@
 // mod test {
 //     use assert_matches::assert_matches;
 //     use bitcoin::hashes::Hash;
-//     use bitcoin::{psbt, OutPoint, Sequence};
+//     use bitcoin::{OutPoint, Sequence, psbt};
 //     use chain::{ChainPosition, ConfirmationBlockTime};
 //     use core::str::FromStr;
 //     use rand::rngs::StdRng;
@@ -837,7 +740,7 @@
 //     use crate::types::*;
 
 //     use rand::prelude::SliceRandom;
-//     use rand::{thread_rng, Rng, RngCore, SeedableRng};
+//     use rand::{Rng, RngCore, SeedableRng, thread_rng};
 
 //     // signature len (1WU) + signature and sighash (72WU)
 //     // + pubkey len (1WU) + pubkey (33WU)
@@ -1094,6 +997,46 @@
 //     }
 
 //     #[test]
+//     fn test_select_sorted_utxos_accumulates_weight_before_fee() {
+//         // Per-input weight of 271 wu makes (1 sat/vb) * weight = 67.75 sat,
+//         // so rounding per-utxo gains 0.25 sat each. Selecting 4 such inputs
+//         // and summing the floors error 272 sat; computing the fee once on
+//         // the accumulated weight yields 271 sat.
+//         let satisfaction_weight = Weight::from_wu(106);
+//         let input_weight = TxIn::default().segwit_weight() + satisfaction_weight;
+//         assert_eq!(input_weight.to_wu(), 271);
+
+//         let utxos: Vec<WeightedUtxo> = (0..4)
+//             .map(|i| {
+//                 let mut wu = unconfirmed_utxo(Amount::from_sat(50_000), i, 0);
+//                 wu.satisfaction_weight = satisfaction_weight;
+//                 wu
+//             })
+//             .collect();
+
+//         let fee_rate = FeeRate::from_sat_per_vb_u32(1);
+//         let drain_script = ScriptBuf::default();
+//         let target_amount = Amount::from_sat(190_000);
+
+//         let result = LargestFirstCoinSelection
+//             .coin_select(
+//                 utxos,
+//                 vec![],
+//                 fee_rate,
+//                 target_amount,
+//                 &drain_script,
+//                 &mut thread_rng(),
+//             )
+//             .unwrap();
+
+//         assert_eq!(result.selected.len(), 4);
+//         let expected_fee = fee_rate * (input_weight * 4);
+//         let buggy_fee = (fee_rate * input_weight) * 4;
+//         assert!(buggy_fee > expected_fee, "test setup must induce rounding");
+//         assert_eq!(result.fee_amount, expected_fee);
+//     }
+
+//     #[test]
 //     fn test_largest_first_coin_selection_insufficient_funds() {
 //         let utxos = get_test_utxos();
 //         let drain_script = ScriptBuf::default();
@@ -1218,10 +1161,12 @@
 //         assert_eq!(result.selected.len(), 3);
 //         assert_eq!(result.selected_amount(), Amount::from_sat(500_000));
 //         assert_eq!(result.fee_amount, Amount::from_sat(204));
-//         assert!(result
-//             .selected
-//             .iter()
-//             .all(|utxo| matches!(utxo, Utxo::Local(..))));
+//         assert!(
+//             result
+//                 .selected
+//                 .iter()
+//                 .all(|utxo| matches!(utxo, Utxo::Local(..)))
+//         );
 //     }
 
 //     #[test]

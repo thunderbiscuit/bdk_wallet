@@ -87,7 +87,9 @@ fn main() {
     println!("  ✓ Better separation of concerns (KeyRing vs Wallet)\n");
 
     println!("MIGRATION STRATEGY:");
-    println!("  1. If you only need External/Internal, keep using KeychainKind as your keychain identifier");
+    println!(
+        "  1. If you only need External/Internal, keep using KeychainKind as your keychain identifier"
+    );
     println!("  2. Change wallet construction to use KeyRing::new() + add_descriptor()");
     println!("  3. Update address generation calls to use reveal_next_address(keychain)");
     println!("  4. If you want to expand beyond 2 keychains, define a custom enum");

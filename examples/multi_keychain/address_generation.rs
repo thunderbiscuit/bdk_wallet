@@ -4,8 +4,8 @@
 // - Working with next_unused_address
 // - Listing unspent outputs per keychain
 
-use bdk_wallet::keyring::KeyRing;
 use bdk_wallet::Wallet;
+use bdk_wallet::keyring::KeyRing;
 use bitcoin::Network;
 use std::collections::BTreeMap;
 

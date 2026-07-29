@@ -1,11 +1,11 @@
 #![cfg(feature = "rusqlite")]
 //! This module provides helper functions and types to assist users in migrating data related to
 //! descriptors when upgrading from version 2.0  of the [`bdk_wallet`](crate) crate.
-use super::{changeset::ChangeSet, KeyRing};
+use super::{KeyRing, changeset::ChangeSet};
 
 use bdk_chain::{
-    rusqlite::{self, Connection, OptionalExtension},
     Impl,
+    rusqlite::{self, Connection, OptionalExtension},
 };
 
 use miniscript::{Descriptor, DescriptorPublicKey};

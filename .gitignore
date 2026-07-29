@@ -1,6 +1,7 @@
 /target
 Cargo.lock
 /.vscode
+/.cargo/config.toml
 
 *.swp
 .idea

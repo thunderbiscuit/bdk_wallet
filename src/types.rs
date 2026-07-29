@@ -14,8 +14,10 @@ use chain::{ChainPosition, ConfirmationBlockTime};
 use core::convert::AsRef;
 use core::fmt;
 
+use crate::collections::BTreeMap;
+
 use bitcoin::transaction::{OutPoint, Sequence, TxOut};
-use bitcoin::{psbt, Weight};
+use bitcoin::{Weight, psbt};
 
 use serde::{Deserialize, Serialize};
 
@@ -180,6 +182,58 @@ where
     }
 }
 
+/// The finalization status for a single PSBT input.
+#[derive(Debug, PartialEq)]
+pub enum FinalizeInputOutcome {
+    /// The input was already finalized before this call.
+    AlreadyFinalized,
+    /// The input was successfully finalized during this call.
+    Finalized,
+    /// The wallet could not derive a descriptor for the input.
+    MissingDescriptor,
+    /// The wallet found the descriptor but could not construct the input satisfaction.
+    CouldNotSatisfy(miniscript::Error),
+}
+
+impl FinalizeInputOutcome {
+    /// Whether the input is finalized after this call.
+    pub fn is_finalized(&self) -> bool {
+        matches!(self, Self::AlreadyFinalized | Self::Finalized)
+    }
+}
+
+/// The outcome of a PSBT finalization attempt.
+#[derive(Debug, PartialEq)]
+pub struct FinalizePsbtOutcome {
+    outcomes: BTreeMap<usize, FinalizeInputOutcome>,
+}
+
+impl FinalizePsbtOutcome {
+    // Constructed by `Wallet::try_finalize_psbt_with`, which is currently commented out pending
+    // the KeyRing migration. Remove this allow once that method is re-enabled.
+    #[allow(dead_code)]
+    pub(crate) fn new(outcomes: BTreeMap<usize, FinalizeInputOutcome>) -> Self {
+        Self { outcomes }
+    }
+
+    /// Whether all inputs are finalized after this call.
+    pub fn is_finalized(&self) -> bool {
+        self.outcomes
+            .values()
+            .all(FinalizeInputOutcome::is_finalized)
+    }
+
+    /// Borrow the per-input finalization outcomes.
+    pub fn outcomes(&self) -> &BTreeMap<usize, FinalizeInputOutcome> {
+        &self.outcomes
+    }
+
+    /// Consume the collection and return the per-input finalization outcomes.
+    pub fn into_outcomes(self) -> BTreeMap<usize, FinalizeInputOutcome> {
+        self.outcomes
+    }
+}
+
 /// Index out of bounds error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexOutOfBoundsError {
@@ -212,8 +266,8 @@ impl core::error::Error for IndexOutOfBoundsError {}
 mod tests {
     use super::*;
     use bitcoin::{
-        absolute, transaction, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
-        Witness,
+        Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness, absolute,
+        transaction,
     };
 
     fn build_tx(txout: TxOut) -> Transaction {

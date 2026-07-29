@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
+use bdk_wallet::KeychainKind;
 use bdk_wallet::descriptor::DescriptorError;
 use bdk_wallet::keyring::KeyRingError;
 use bdk_wallet::keyring::{ChangeSet, KeyRing};
 use bdk_wallet::test_utils::get_test_wpkh_and_change_desc;
-use bdk_wallet::KeychainKind;
-use bitcoin::secp256k1::Secp256k1;
 use bitcoin::Network;
+use bitcoin::secp256k1::Secp256k1;
 use miniscript::{Descriptor, DescriptorPublicKey};
 
 // From the mnemonic "awesome awesome awesome awesome awesome awesome awesome awesome awesome
@@ -128,8 +128,8 @@ fn test_duplicate_keychain_and_desc() {
 #[test]
 fn test_from_v2() -> anyhow::Result<()> {
     use bdk_chain::{
-        rusqlite::{params, types::Null, Connection},
         Impl,
+        rusqlite::{Connection, params, types::Null},
     };
     let mut conn = Connection::open_in_memory()?;
 

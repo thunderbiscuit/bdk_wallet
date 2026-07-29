@@ -1,9 +1,9 @@
 //! User facing wallet events.
 
+use crate::Wallet;
 use crate::collections::BTreeMap;
 use crate::keyring::KeyRing;
 use crate::wallet::ChainPosition::{Confirmed, Unconfirmed};
-use crate::Wallet;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitcoin::psbt::KeyRequest;

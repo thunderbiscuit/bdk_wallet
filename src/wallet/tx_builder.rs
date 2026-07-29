@@ -43,8 +43,8 @@ use alloc::sync::Arc;
 use bitcoin::psbt::{self, Psbt};
 use bitcoin::script::PushBytes;
 use bitcoin::{
-    absolute, transaction::Version, Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction,
-    TxIn, TxOut, Txid, Weight,
+    Amount, FeeRate, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Weight,
+    absolute, transaction::Version,
 };
 use rand_core::RngCore;
 
@@ -323,7 +323,13 @@ impl Default for FeePolicy {
 //     /// Add a UTXO to the internal list of UTXOs that **must** be spent
 //     ///
 //     /// These have priority over the "unspendable" UTXOs, meaning that if a UTXO is present both
-// in     /// the "UTXOs" and the "unspendable" list, it will be spent.
+//     /// in
+//     /// the "UTXOs" and the "unspendable" list, it will be spent.
+//     ///
+//     /// Manually selected UTXOs bypass optional-UTXO filtering (for example TRUC version
+//     /// compatibility checks). Callers must ensure any manually selected unconfirmed UTXO is
+//     /// valid
+//     /// for the transaction version being built.
 //     pub fn add_utxo(&mut self, outpoint: OutPoint) -> Result<&mut Self, AddUtxoError> {
 //         self.add_utxos(&[outpoint])
 //     }
@@ -335,11 +341,17 @@ impl Default for FeePolicy {
 //     /// UTXO cannot replace a conflicting local UTXO.
 //     ///
 //     /// There might be cases where the UTXO belongs to the wallet but it doesn't have knowledge
-// of     /// it. This is possible if the wallet is not synced or its not being use to track
+//     /// of
+//     /// it. This is possible if the wallet is not synced or its not being use to track
 //     /// transactions. In those cases is the responsibility of the user to add any possible local
 //     /// UTXOs through the [`TxBuilder::add_utxo`] method.
 //     /// A manually added local UTXO will always have greater precedence than a foreign UTXO. No
 //     /// matter if it was added before or after the foreign UTXO.
+//     ///
+//     /// Manually selected UTXOs bypass optional-UTXO filtering (for example TRUC version
+//     /// compatibility checks). Callers must ensure any manually selected unconfirmed UTXO is
+//     /// valid
+//     /// for the transaction version being built.
 //     ///
 //     /// At a minimum to add a foreign UTXO we need:
 //     ///
@@ -350,21 +362,29 @@ impl Default for FeePolicy {
 //     ///
 //     /// There are several security concerns about adding foreign UTXOs that application
 //     /// developers should consider. First, how do you know the value of the input is correct? If
-// a     /// `non_witness_utxo` is provided in the `psbt_input` then this method implicitly verifies
-// the     /// value by checking it against the transaction. If only a `witness_utxo` is provided
-// then this     /// method doesn't verify the value but just takes it as a given -- it is up to you
-// to check     /// that whoever sent you the `input_psbt` was not lying!
+//     /// a
+//     /// `non_witness_utxo` is provided in the `psbt_input` then this method implicitly verifies
+//     /// the
+//     /// value by checking it against the transaction. If only a `witness_utxo` is provided then
+//     /// this
+//     /// method doesn't verify the value but just takes it as a given -- it is up to you to check
+//     /// that whoever sent you the `input_psbt` was not lying!
 //     ///
 //     /// Secondly, you must somehow provide `satisfaction_weight` of the input. Depending on your
 //     /// application it may be important that this be known precisely. If not, a malicious
 //     /// counterparty may fool you into putting in a value that is too low, giving the transaction
-// a     /// lower than expected feerate. They could also fool you into putting a value that is too
-// high     /// causing you to pay a fee that is too high. The party who is broadcasting the
-// transaction can     /// of course check the real input weight matches the expected weight prior
-// to broadcasting.     ///
+//     /// a
+//     /// lower than expected feerate. They could also fool you into putting a value that is too
+//     /// high
+//     /// causing you to pay a fee that is too high. The party who is broadcasting the transaction
+//     /// can
+//     /// of course check the real input weight matches the expected weight prior to broadcasting.
+//     ///
 //     /// To guarantee the `max_weight_to_satisfy` is correct, you can require the party providing
-// the     /// `psbt_input` provide a miniscript descriptor for the input so you can check it
-// against the     /// `script_pubkey` and then ask it for the [`max_weight_to_satisfy`].
+//     /// the
+//     /// `psbt_input` provide a miniscript descriptor for the input so you can check it against
+//     /// the
+//     /// `script_pubkey` and then ask it for the [`max_weight_to_satisfy`].
 //     ///
 //     /// This is an **EXPERIMENTAL** feature, API and other major changes are expected.
 //     ///
@@ -830,7 +850,7 @@ type TxSort<T> = dyn (Fn(&T, &T) -> core::cmp::Ordering) + Send + Sync;
 
 /// Ordering of the transaction's inputs and outputs
 #[derive(Clone, Default)]
-pub enum TxOrdering {
+pub enum TxOrdering<In = TxIn, Out = TxOut> {
     /// Randomized (default)
     #[default]
     Shuffle,
@@ -845,13 +865,13 @@ pub enum TxOrdering {
     /// Provide custom comparison functions for sorting
     Custom {
         /// Transaction inputs sort function
-        input_sort: Arc<TxSort<TxIn>>,
+        input_sort: Arc<TxSort<In>>,
         /// Transaction outputs sort function
-        output_sort: Arc<TxSort<TxOut>>,
+        output_sort: Arc<TxSort<Out>>,
     },
 }
 
-impl core::fmt::Debug for TxOrdering {
+impl<I, O> core::fmt::Debug for TxOrdering<I, O> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         match self {
             TxOrdering::Shuffle => write!(f, "Shuffle"),
@@ -930,9 +950,9 @@ mod test {
     }
 
     use crate::test_utils::*;
+    use bitcoin::TxOut;
     use bitcoin::consensus::deserialize;
     use bitcoin::hex::FromHex;
-    use bitcoin::TxOut;
 
     use super::*;
     #[test]
@@ -1022,7 +1042,7 @@ mod test {
 
     #[test]
     fn test_output_ordering_custom_with_sha256() {
-        use bitcoin::hashes::{sha256, Hash};
+        use bitcoin::hashes::{Hash, sha256};
 
         let original_tx = ordering_test_tx!();
         let mut tx_1 = original_tx.clone();
@@ -1153,10 +1173,10 @@ mod test {
     //     assert_eq!(filtered[0].keychain, KeychainKind::Internal);
     // }
 
-    // #[test]
-    // fn test_exclude_unconfirmed() {
-    //     use bdk_chain::BlockId;
-    //     use bitcoin::{hashes::Hash, BlockHash, Network};
+    //     #[test]
+    //     fn test_exclude_unconfirmed() {
+    //         use bdk_chain::BlockId;
+    //         use bitcoin::{BlockHash, Network, hashes::Hash};
 
     //     let mut wallet = Wallet::create_single(get_test_tr_single_sig())
     //         .network(Network::Regtest)
@@ -1242,10 +1262,10 @@ mod test {
     //     }
     // }
 
-    // #[test]
-    // fn test_build_fee_bump_remove_change_output_single_desc() {
-    //     use bdk_chain::BlockId;
-    //     use bitcoin::{hashes::Hash, BlockHash, Network};
+    //     #[test]
+    //     fn test_build_fee_bump_remove_change_output_single_desc() {
+    //         use bdk_chain::BlockId;
+    //         use bitcoin::{BlockHash, Network, hashes::Hash};
 
     //     let mut wallet = Wallet::create_single(get_test_tr_single_sig())
     //         .network(Network::Regtest)
@@ -1380,33 +1400,37 @@ mod test {
 
     //     let mut builder = wallet2.build_tx();
 
-    //     // add foreign UTXO with satisfaction weight x
-    //     assert!(builder
-    //         .add_foreign_utxo(
-    //             utxo1.outpoint,
-    //             psbt::Input {
-    //                 non_witness_utxo: Some(tx1.as_ref().clone()),
-    //                 ..Default::default()
-    //             },
-    //             satisfaction_weight,
-    //         )
-    //         .is_ok());
+    //         // add foreign UTXO with satisfaction weight x
+    //         assert!(
+    //             builder
+    //                 .add_foreign_utxo(
+    //                     utxo1.outpoint,
+    //                     psbt::Input {
+    //                         non_witness_utxo: Some(tx1.as_ref().clone()),
+    //                         ..Default::default()
+    //                     },
+    //                     satisfaction_weight,
+    //                 )
+    //                 .is_ok()
+    //         );
 
     //     let modified_satisfaction_weight = satisfaction_weight - Weight::from_wu(6);
 
     //     assert_ne!(satisfaction_weight, modified_satisfaction_weight);
 
-    //     // add foreign UTXO with same outpoint but satisfaction weight x - 6wu
-    //     assert!(builder
-    //         .add_foreign_utxo(
-    //             utxo1.outpoint,
-    //             psbt::Input {
-    //                 non_witness_utxo: Some(tx1.as_ref().clone()),
-    //                 ..Default::default()
-    //             },
-    //             modified_satisfaction_weight,
-    //         )
-    //         .is_ok());
+    //         // add foreign UTXO with same outpoint but satisfaction weight x - 6wu
+    //         assert!(
+    //             builder
+    //                 .add_foreign_utxo(
+    //                     utxo1.outpoint,
+    //                     psbt::Input {
+    //                         non_witness_utxo: Some(tx1.as_ref().clone()),
+    //                         ..Default::default()
+    //                     },
+    //                     modified_satisfaction_weight,
+    //                 )
+    //                 .is_ok()
+    //         );
 
     //     assert_eq!(builder.params.utxos.len(), 1);
     //     assert_eq!(

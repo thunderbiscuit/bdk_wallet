@@ -4,10 +4,10 @@ use std::path::Path;
 use anyhow::Context;
 use bdk_chain::DescriptorId;
 use bdk_chain::{
-    keychain_txout::DEFAULT_LOOKAHEAD,
-    // ChainPosition,
     ConfirmationBlockTime,
     DescriptorExt,
+    keychain_txout::DEFAULT_LOOKAHEAD,
+    // ChainPosition,
 };
 use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::keyring::KeyRing;
@@ -15,7 +15,7 @@ use bdk_wallet::test_utils::*;
 use bdk_wallet::{ChangeSet, KeychainKind, Wallet, WalletPersister};
 use bitcoin::key::Secp256k1;
 use bitcoin::{
-    absolute, secp256k1, transaction, Amount, Network, NetworkKind, ScriptBuf, Transaction, TxOut,
+    Amount, Network, NetworkKind, ScriptBuf, Transaction, TxOut, absolute, secp256k1, transaction,
 };
 
 use bdk_wallet::persist_test_utils::{
@@ -436,44 +436,71 @@ fn wallet_should_persist_anchors_and_recover() {
 //     assert_eq!(loaded.derivation_index(KeychainKind::External), Some(2));
 // }
 
+const KEYCHAINS: [KeychainKind; 2] = [KeychainKind::External, KeychainKind::Internal];
+
 #[test]
 fn wallet_changeset_is_persisted() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Test file_store
     persist_wallet_changeset(
-        "store.db",
-        |path| Ok(bdk_file_store::Store::create(DB_MAGIC, path)?),
-        KeychainKind::External,
-    );
-    persist_wallet_changeset::<bdk_chain::rusqlite::Connection, _, _>(
-        "store.sqlite",
-        |path| Ok(bdk_chain::rusqlite::Connection::open(path)?),
-        KeychainKind::External,
-    );
+        || {
+            bdk_file_store::Store::load_or_create(DB_MAGIC, tmpdir.path().join("store.db"))
+                .map(|(store, _)| store)
+                .map_err(bdk_wallet::FileStoreError::Load)
+        },
+        KEYCHAINS,
+    )
+    .expect("failed to persist wallet changeset");
+
+    // Test rusqlite Connection
+    persist_wallet_changeset(
+        || bdk_chain::rusqlite::Connection::open(tmpdir.path().join("store.sqlite")),
+        KEYCHAINS,
+    )
+    .expect("failed to persist wallet changeset");
 }
 
 #[test]
 fn keychains_are_persisted() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Test file_store
     persist_keychains(
-        "store.db",
-        |path| Ok(bdk_file_store::Store::create(DB_MAGIC, path)?),
-        KeychainKind::External,
-        KeychainKind::Internal,
-    );
-    persist_keychains::<bdk_chain::rusqlite::Connection, _, _>(
-        "store.sqlite",
-        |path| Ok(bdk_chain::rusqlite::Connection::open(path)?),
-        KeychainKind::External,
-        KeychainKind::Internal,
-    );
+        || {
+            bdk_file_store::Store::load_or_create(DB_MAGIC, tmpdir.path().join("store.db"))
+                .map(|(store, _)| store)
+                .map_err(bdk_wallet::FileStoreError::Load)
+        },
+        KEYCHAINS,
+    )
+    .expect("failed to persist keychains");
+
+    // Test rusqlite Connection
+    persist_keychains(
+        || bdk_chain::rusqlite::Connection::open(tmpdir.path().join("store.sqlite")),
+        KEYCHAINS,
+    )
+    .expect("failed to persist keychains");
 }
 
 #[test]
 fn network_is_persisted() {
-    persist_network::<_, _, KeychainKind>("store.db", |path| {
-        Ok(bdk_file_store::Store::create(DB_MAGIC, path)?)
-    });
-    persist_network::<bdk_chain::rusqlite::Connection, _, KeychainKind>("store.sqlite", |path| {
-        Ok(bdk_chain::rusqlite::Connection::open(path)?)
-    });
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Test file_store
+    persist_network::<_, _, KeychainKind>(|| {
+        bdk_file_store::Store::load_or_create(DB_MAGIC, tmpdir.path().join("store.db"))
+            .map(|(store, _)| store)
+            .map_err(bdk_wallet::FileStoreError::Load)
+    })
+    .expect("failed to persist network");
+
+    // Test rusqlite Connection
+    persist_network::<_, _, KeychainKind>(|| {
+        bdk_chain::rusqlite::Connection::open(tmpdir.path().join("store.sqlite"))
+    })
+    .expect("failed to persist network");
 }
 
 #[test]

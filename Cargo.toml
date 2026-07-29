@@ -1,7 +1,7 @@
 [package]
 name = "bdk_wallet"
 homepage = "https://bitcoindevkit.org"
-version = "3.1.0-alpha.0"
+version = "3.1.0"
 repository = "https://github.com/bitcoindevkit/bdk_wallet"
 documentation = "https://docs.rs/bdk_wallet"
 description = "A modern, lightweight, descriptor-based wallet library"
@@ -9,18 +9,19 @@ keywords = ["bitcoin", "wallet", "descriptor", "psbt"]
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 authors = ["Bitcoin Dev Kit Developers"]
-edition = "2021"
+edition = "2024"
 rust-version = "1.85.0"
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+rustdoc-args = ["--cfg", "docsrs", "--cfg", "bdk_wallet_unstable"]
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)', 'cfg(bdk_wallet_unstable)'] }
 
 [dependencies]
 bdk_chain = { version = "0.23.3", features = ["miniscript", "serde"], default-features = false }
+bdk_tx = { version = "0.2.0", default-features = false, optional = true }
 bitcoin = { version = "0.32.8", features = ["serde", "base64"], default-features = false }
 miniscript = { version = "12.3.5", features = ["serde"], default-features = false }
 rand_core = { version = "0.6.4" }
@@ -28,20 +29,20 @@ serde_json = { version = "1" }
 serde = { version = "1", features = ["derive"] }
 
 # Optional dependencies
-anyhow = { version = "1", optional = true }
 bdk_file_store = { version = "0.22.0", optional = true }
 bip39 = { version = "2.2.2", optional = true }
-tempfile = { version = "3.26.0", optional = true }
+
 
 [features]
 default = ["std"]
-std = ["bitcoin/std", "bitcoin/rand-std", "miniscript/std", "bdk_chain/std"]
+std = ["bitcoin/std", "bitcoin/rand-std", "miniscript/std", "bdk_chain/std", "bdk_tx?/std"]
 compiler = ["miniscript/compiler"]
 all-keys = ["keys-bip39"]
 keys-bip39 = ["bip39"]
 rusqlite = ["bdk_chain/rusqlite"]
 file_store = ["bdk_file_store"]
-test-utils = ["std", "anyhow", "tempfile"]
+bdk-tx = ["dep:bdk_tx"]
+test-utils = ["std"]
 
 [dev-dependencies]
 anyhow = "1"
@@ -49,6 +50,7 @@ assert_matches = "1.5.0"
 bdk_bitcoind_rpc = { version = "0.22.0" }
 bdk_electrum = { version = "0.23.2" }
 bdk_esplora = { version = "0.22.1", features = ["async-https", "blocking-https", "tokio"] }
+bdk_tx = { version = "0.2.0" }
 bdk_wallet = { path = ".", features = ["rusqlite", "file_store", "test-utils"] }
 clap = { version = "4.5.60", features = ["derive", "env"] }
 ctrlc = "3.5.2"
@@ -77,6 +79,14 @@ name = "esplora_blocking"
 
 [[example]]
 name = "bitcoind_rpc"
+
+[[example]]
+name = "psbt"
+required-features = ["bdk-tx"]
+
+[[example]]
+name = "replace_by_fee"
+required-features = ["bdk-tx"]
 
 [[example]]
 name = "multi_keychain_address_generation"

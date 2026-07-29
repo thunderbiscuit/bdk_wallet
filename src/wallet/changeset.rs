@@ -1,6 +1,6 @@
 use alloc::collections::btree_map::BTreeMap;
 use bdk_chain::{
-    indexed_tx_graph, keychain_txout, local_chain, tx_graph, ConfirmationBlockTime, Merge,
+    ConfirmationBlockTime, Merge, indexed_tx_graph, keychain_txout, local_chain, tx_graph,
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 use serde::{Deserialize, Serialize};
@@ -14,11 +14,11 @@ use crate::keyring;
 
 #[cfg(feature = "rusqlite")]
 use chain::{
+    Impl,
     rusqlite::{
         self,
         types::{FromSql, ToSql},
     },
-    Impl,
 };
 
 /// A change set for [`Wallet`]
@@ -173,6 +173,8 @@ where
 {
     /// Merge another [`ChangeSet`] into itself.
     fn merge(&mut self, other: Self) {
+        // The descriptor and network invariants upstream enforces here are enforced by
+        // `keyring::changeset::ChangeSet::merge`, which owns those fields in this model.
         // merge locked outpoints
         self.locked_outpoints.merge(other.locked_outpoints);
         Merge::merge(&mut self.keyring, other.keyring);
@@ -230,8 +232,8 @@ where
     /// Recover a [`ChangeSet`] from sqlite database.
     pub fn from_sqlite(db_tx: &chain::rusqlite::Transaction) -> chain::rusqlite::Result<Self> {
         use bitcoin::{OutPoint, Txid};
-        use chain::rusqlite::OptionalExtension;
         use chain::Impl;
+        use chain::rusqlite::OptionalExtension;
 
         let mut changeset = Self::default();
 
@@ -266,9 +268,10 @@ where
         &self,
         db_tx: &chain::rusqlite::Transaction,
     ) -> chain::rusqlite::Result<()> {
-        use chain::rusqlite::named_params;
         use chain::Impl;
+        use chain::rusqlite::named_params;
 
+        // Descriptor and network rows are persisted by `keyring::changeset::ChangeSet`.
         // Insert or delete locked outpoints.
         let mut insert_stmt = db_tx.prepare_cached(&format!(
             "INSERT OR IGNORE INTO {}(txid, vout) VALUES(:txid, :vout)",
@@ -360,5 +363,108 @@ where
             locked_outpoints,
             ..Default::default()
         }
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(test)]
+mod test {
+    // Tests that merging `ChangeSet`s with write-once fields follows "first write wins" semantics
+    //
+    // Verifies three scenarios:
+    // 1. `None` + `Some(x)` => `Some(x)` (initial write accepted)
+    // 2. `Some(x)` + `None` => `Some(x)` (field is not cleared)
+    // 3. `Some(x)` + `Some(y)` => `Some(x)` (same value, no change)
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn merge_first_write_wins() {
+        use super::*;
+        use crate::persist_test_utils::DESCRIPTORS;
+        use bitcoin::Network;
+        let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
+        let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
+
+        // Scenario 1: None + Some(x) - first write populates the field
+        let mut change_set = ChangeSet::default();
+        let other_change_set = ChangeSet {
+            descriptor: Some(descriptor.clone()),
+            change_descriptor: Some(change_descriptor.clone()),
+            network: Some(Network::Bitcoin),
+            ..ChangeSet::default()
+        };
+        Merge::merge(&mut change_set, other_change_set);
+        assert_eq!(
+            change_set.descriptor,
+            Some(descriptor.clone()),
+            "descriptor should be populated from first merge"
+        );
+        assert_eq!(
+            change_set.change_descriptor,
+            Some(change_descriptor.clone()),
+            "change_descriptor should be populated from first merge"
+        );
+        assert_eq!(
+            change_set.network,
+            Some(Network::Bitcoin),
+            "network should be populated from first merge"
+        );
+
+        // Scenario 2: Some(x) + None - existing field is unchanged
+        let mut change_set = ChangeSet {
+            descriptor: Some(descriptor.clone()),
+            change_descriptor: Some(change_descriptor.clone()),
+            network: Some(Network::Bitcoin),
+            ..ChangeSet::default()
+        };
+        Merge::merge(&mut change_set, ChangeSet::default());
+        assert_eq!(
+            change_set.descriptor,
+            Some(descriptor.clone()),
+            "descriptor must not change when merging empty changeset"
+        );
+        assert_eq!(
+            change_set.change_descriptor,
+            Some(change_descriptor.clone()),
+            "change_descriptor must not change when merging empty changeset"
+        );
+        assert_eq!(
+            change_set.network,
+            Some(Network::Bitcoin),
+            "network must not change when merging empty changeset"
+        );
+
+        // Scenario 3: Some(x) + Some(y) - existing field is unchanged
+        let mut change_set = ChangeSet {
+            descriptor: Some(descriptor.clone()),
+            change_descriptor: Some(change_descriptor.clone()),
+            network: Some(Network::Bitcoin),
+            ..ChangeSet::default()
+        };
+        let other_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[2].parse().unwrap();
+        let other_change_descriptor: Descriptor<DescriptorPublicKey> =
+            DESCRIPTORS[3].parse().unwrap();
+        let other_change_set = ChangeSet {
+            descriptor: Some(other_descriptor),
+            change_descriptor: Some(other_change_descriptor),
+            network: Some(Network::Regtest),
+            ..ChangeSet::default()
+        };
+        assert_ne!(change_set, other_change_set);
+        Merge::merge(&mut change_set, other_change_set);
+        assert_eq!(
+            change_set.descriptor,
+            Some(descriptor),
+            "descriptor must not change when merging other value"
+        );
+        assert_eq!(
+            change_set.change_descriptor,
+            Some(change_descriptor),
+            "change_descriptor must not change when merging other value"
+        );
+        assert_eq!(
+            change_set.network,
+            Some(Network::Bitcoin),
+            "network must not change when merging other value"
+        );
     }
 }

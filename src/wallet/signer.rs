@@ -92,11 +92,12 @@ use core::ops::{Bound::Included, Deref};
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpriv};
 use bitcoin::hashes::hash160;
+use bitcoin::psbt::PsbtSighashType;
 use bitcoin::secp256k1::Message;
 use bitcoin::sighash::{EcdsaSighashType, TapSighash, TapSighashType};
+use bitcoin::{PrivateKey, Psbt, PublicKey};
 use bitcoin::{ecdsa, psbt, sighash, taproot};
 use bitcoin::{key::TapTweak, key::XOnlyPublicKey, secp256k1};
-use bitcoin::{PrivateKey, Psbt, PublicKey};
 
 use miniscript::descriptor::{
     Descriptor, DescriptorMultiXKey, DescriptorPublicKey, DescriptorSecretKey, DescriptorXKey,
@@ -155,10 +156,10 @@ pub enum SignerError {
     MissingWitnessScript,
     /// The fingerprint and derivation path are missing from the psbt input
     MissingHdKeypath,
-    /// The psbt contains a non-`SIGHASH_ALL` sighash in one of its input and the user hasn't
+    /// The PSBT contains a non-`SIGHASH_ALL` sighash in one of its inputs and the user hasn't
     /// explicitly allowed them
     ///
-    /// To enable signing transactions with non-standard sighashes set
+    /// To enable signing transactions with non-`SIGHASH_ALL` set
     /// [`SignOptions::allow_all_sighashes`] to `true`.
     NonStandardSighash,
     /// Invalid SIGHASH for the signing context in use
@@ -179,7 +180,10 @@ impl fmt::Display for SignerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingKey => write!(f, "Missing private key"),
-            Self::InvalidKey => write!(f, "The private key in use has the right fingerprint but derives differently than expected"),
+            Self::InvalidKey => write!(
+                f,
+                "The private key in use has the right fingerprint but derives differently than expected"
+            ),
             Self::UserCanceled => write!(f, "The user canceled the operation"),
             Self::InputIndexOutOfRange(err) => write!(f, "{err}"),
             Self::MissingNonWitnessUtxo => write!(f, "Missing non-witness UTXO"),
@@ -189,7 +193,10 @@ impl fmt::Display for SignerError {
             Self::MissingHdKeypath => write!(f, "Missing fingerprint and derivation path"),
             Self::NonStandardSighash => write!(f, "The psbt contains a non standard sighash"),
             Self::InvalidSighash => write!(f, "Invalid SIGHASH for the signing context in use"),
-            Self::SighashTaproot(err) => write!(f, "Error while computing the hash to sign a Taproot input: {err}"),
+            Self::SighashTaproot(err) => write!(
+                f,
+                "Error while computing the hash to sign a Taproot input: {err}"
+            ),
             Self::Psbt(err) => write!(f, "Error computing the sighash: {err}"),
             Self::MiniscriptPsbt(err) => write!(f, "Miniscript PSBT error: {err}"),
             Self::External(err) => write!(f, "{err}"),
@@ -463,6 +470,28 @@ impl InputSigner for SignerWrapper<PrivateKey> {
             || psbt.inputs[input_index].final_script_witness.is_some()
         {
             return Ok(());
+        }
+
+        fn is_sighash_all(ctx: SignerContext, sighash_type: PsbtSighashType) -> bool {
+            match ctx {
+                SignerContext::Legacy | SignerContext::Segwitv0 => {
+                    matches!(sighash_type.ecdsa_hash_ty(), Ok(EcdsaSighashType::All))
+                }
+                SignerContext::Tap { .. } => {
+                    matches!(
+                        sighash_type.taproot_hash_ty(),
+                        Ok(TapSighashType::All) | Ok(TapSighashType::Default)
+                    )
+                }
+            }
+        }
+
+        if !sign_options.allow_all_sighashes {
+            if let Some(sht) = psbt.inputs[input_index].sighash_type {
+                if !is_sighash_all(self.ctx, sht) {
+                    return Err(SignerError::NonStandardSighash);
+                }
+            }
         }
 
         let pubkey = PublicKey::from_private_key(secp, self);
@@ -928,9 +957,8 @@ mod signers_container_tests {
 
     use assert_matches::assert_matches;
     use bitcoin::{
-        bip32,
+        NetworkKind, bip32,
         secp256k1::{All, Secp256k1},
-        NetworkKind,
     };
     use core::str::FromStr;
     use miniscript::ScriptContext;
@@ -1011,6 +1039,100 @@ mod signers_container_tests {
         assert_matches!(signers.find(id_nonexistent), None);
     }
 
+    #[test]
+    fn sign_input_rejects_non_standard_sighash() {
+        use bitcoin::{
+            Amount, OutPoint, PrivateKey, ScriptBuf, Sequence, TxIn, TxOut, Witness, absolute,
+            psbt::Input, sighash::TapSighashType, transaction,
+        };
+
+        let secp = Secp256k1::new();
+
+        // Build a private key and derive its x-only pubkey for taproot
+        let tprv = bip32::Xpriv::from_str(TPRV0_STR).unwrap();
+        let priv_key = PrivateKey::new(tprv.private_key, bitcoin::NetworkKind::Test);
+        let pubkey = priv_key.public_key(&secp);
+        let x_only = bitcoin::key::XOnlyPublicKey::from(pubkey.inner);
+
+        // Wrap as a taproot signer treating this key as the internal key
+        let signer = SignerWrapper::new(
+            priv_key,
+            SignerContext::Tap {
+                is_internal_key: true,
+            },
+        );
+
+        // Build a minimal unsigned transaction with one input
+        let unsigned_tx = bitcoin::Transaction {
+            version: transaction::Version::TWO,
+            lock_time: absolute::LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::default(),
+                sequence: Sequence::MAX,
+                witness: Witness::default(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(90_000),
+                script_pubkey: ScriptBuf::default(),
+            }],
+        };
+
+        // Build a base PSBT from the unsigned transaction to be cloned for each assertion
+        let mut base_psbt = bitcoin::Psbt::from_unsigned_tx(unsigned_tx).unwrap();
+        base_psbt.inputs[0] = Input {
+            tap_internal_key: Some(x_only),
+            witness_utxo: Some(TxOut {
+                value: Amount::from_sat(100_000),
+                script_pubkey: ScriptBuf::default(),
+            }),
+            ..Default::default()
+        };
+
+        let opts_reject = SignOptions {
+            allow_all_sighashes: false,
+            ..Default::default()
+        };
+
+        let opts_allow = SignOptions {
+            allow_all_sighashes: true,
+            ..Default::default()
+        };
+
+        // SIGHASH_NONE + allow_all_sighashes: false -> must reject
+        let mut psbt = base_psbt.clone();
+        psbt.inputs[0].sighash_type = Some(TapSighashType::None.into());
+        assert_matches!(
+            signer.sign_input(&mut psbt, 0, &opts_reject, &secp),
+            Err(SignerError::NonStandardSighash),
+            "expected NonStandardSighash when allow_all_sighashes is false"
+        );
+
+        // SIGHASH_ALL + allow_all_sighashes: false -> must pass guard
+        let mut psbt = base_psbt.clone();
+        psbt.inputs[0].sighash_type = Some(TapSighashType::All.into());
+        assert!(
+            signer.sign_input(&mut psbt, 0, &opts_reject, &secp).is_ok(),
+            "SIGHASH_ALL should not be rejected when allow_all_sighashes is false"
+        );
+
+        // SIGHASH_DEFAULT + allow_all_sighashes: false -> must pass guard
+        let mut psbt = base_psbt.clone();
+        psbt.inputs[0].sighash_type = Some(TapSighashType::Default.into());
+        assert!(
+            signer.sign_input(&mut psbt, 0, &opts_reject, &secp).is_ok(),
+            "SIGHASH_DEFAULT should not be rejected when allow_all_sighashes is false"
+        );
+
+        // SIGHASH_NONE + allow_all_sighashes: true -> guard must not reject
+        let mut psbt = base_psbt.clone();
+        psbt.inputs[0].sighash_type = Some(TapSighashType::None.into());
+        assert!(
+            signer.sign_input(&mut psbt, 0, &opts_allow, &secp).is_ok(),
+            "expected guard to pass when allow_all_sighashes is true"
+        );
+    }
+
     #[derive(Debug, Clone, Copy)]
     struct DummySigner {
         number: u64,
@@ -1033,8 +1155,8 @@ mod signers_container_tests {
         }
     }
 
-    const TPRV0_STR:&str = "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf";
-    const TPRV1_STR:&str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
+    const TPRV0_STR: &str = "tprv8ZgxMBicQKsPdZXrcHNLf5JAJWFAoJ2TrstMRdSKtEggz6PddbuSkvHKM9oKJyFgZV1B7rw8oChspxyYbtmEXYyg1AjfWbL3ho3XHDpHRZf";
+    const TPRV1_STR: &str = "tprv8ZgxMBicQKsPdpkqS7Eair4YxjcuuvDPNYmKX3sCniCf16tHEVrjjiSXEkFRnUH77yXc6ZcwHHcLNfjdi5qUvw3VDfgYiH5mNsj5izuiu2N";
 
     const PATH: &str = "m/44'/1'/0'/0";
 
