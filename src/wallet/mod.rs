@@ -65,9 +65,9 @@ pub(crate) mod utils;
 
 use crate::collections::{BTreeMap, HashMap, HashSet};
 use crate::descriptor::{
-    DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy, IntoWalletDescriptor,
-    Policy, XKeyUtils, calc_checksum, check_wallet_descriptor, error::Error as DescriptorError,
-    policy::BuildSatisfaction,
+    Condition, DerivedDescriptor, DescriptorMeta, ExtendedDescriptor, ExtractPolicy,
+    IntoWalletDescriptor, Policy, XKeyUtils, calc_checksum, check_wallet_descriptor,
+    error::Error as DescriptorError, policy::BuildSatisfaction,
 };
 use crate::psbt::PsbtUtils;
 use crate::types::*;
@@ -1269,65 +1269,54 @@ impl Wallet {
         params: TxParams,
         rng: &mut impl RngCore,
     ) -> Result<Psbt, CreateTxError> {
-        let keychains: BTreeMap<_, _> = self.tx_graph.index.keychains().collect();
-        let external_descriptor = keychains.get(&KeychainKind::External).expect("must exist");
-        let internal_descriptor = keychains.get(&KeychainKind::Internal);
+        // The spending condition may be supplied by the caller via `TxBuilder::set_condition`.
+        // Otherwise we derive it from the descriptors themselves. Deriving needs no key material:
+        // signers only influence a policy's `contribution`/`satisfaction`, which `get_condition`
+        // ignores, so an empty container is sufficient. If a descriptor offers several ways to be
+        // satisfied, `get_condition` cannot choose between them and the caller must say which one
+        // it intends via `set_condition`.
+        let requirements = match params.condition {
+            Some(condition) => condition,
+            None => {
+                let keychains: BTreeMap<_, _> = self.tx_graph.index.keychains().collect();
+                let no_signers = SignersContainer::default();
+                let no_path = BTreeMap::new();
 
-        let external_policy = external_descriptor
-            .extract_policy(&self.signers, BuildSatisfaction::None, &self.secp)?
-            .unwrap();
-        let internal_policy = internal_descriptor
-            .map(|desc| {
-                Ok::<_, CreateTxError>(
-                    desc.extract_policy(&self.change_signers, BuildSatisfaction::None, &self.secp)?
-                        .unwrap(),
-                )
-            })
-            .transpose()?;
-
-        // The policy allows spending external outputs, but it requires a policy path that hasn't
-        // been provided
-        if params.change_policy != tx_builder::ChangeSpendPolicy::OnlyChange
-            && external_policy.requires_path()
-            && params.external_policy_path.is_none()
-        {
-            return Err(CreateTxError::SpendingPolicyRequired(
-                KeychainKind::External,
-            ));
+                let mut requirements = Condition::default();
+                for (keychain, skip) in [
+                    (
+                        KeychainKind::External,
+                        tx_builder::ChangeSpendPolicy::OnlyChange,
+                    ),
+                    (
+                        KeychainKind::Internal,
+                        tx_builder::ChangeSpendPolicy::ChangeForbidden,
+                    ),
+                ] {
+                    if params.change_policy == skip {
+                        continue;
+                    }
+                    let Some(descriptor) = keychains.get(&keychain) else {
+                        continue;
+                    };
+                    let Some(policy) = descriptor.extract_policy(
+                        &no_signers,
+                        BuildSatisfaction::None,
+                        &self.secp,
+                    )?
+                    else {
+                        continue;
+                    };
+                    // A policy that cannot be resolved without an explicit path needs the caller
+                    // to pick one.
+                    let condition = policy
+                        .get_condition(&no_path)
+                        .map_err(|_| CreateTxError::SpendingPolicyRequired(keychain))?;
+                    requirements = requirements.merge(&condition)?;
+                }
+                requirements
+            }
         };
-        // Same for the internal_policy path
-        if let Some(internal_policy) = &internal_policy {
-            if params.change_policy != tx_builder::ChangeSpendPolicy::ChangeForbidden
-                && internal_policy.requires_path()
-                && params.internal_policy_path.is_none()
-            {
-                return Err(CreateTxError::SpendingPolicyRequired(
-                    KeychainKind::Internal,
-                ));
-            };
-        }
-
-        let external_requirements = external_policy.get_condition(
-            params
-                .external_policy_path
-                .as_ref()
-                .unwrap_or(&BTreeMap::new()),
-        )?;
-        let internal_requirements = internal_policy
-            .map(|policy| {
-                Ok::<_, CreateTxError>(
-                    policy.get_condition(
-                        params
-                            .internal_policy_path
-                            .as_ref()
-                            .unwrap_or(&BTreeMap::new()),
-                    )?,
-                )
-            })
-            .transpose()?;
-
-        let requirements =
-            external_requirements.merge(&internal_requirements.unwrap_or_default())?;
 
         let version = match params.version {
             Some(transaction::Version(0)) => return Err(CreateTxError::Version0),

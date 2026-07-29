@@ -6,7 +6,8 @@ use bdk_chain::{BlockId, CanonicalizationParams, ConfirmationBlockTime};
 use bdk_wallet::KeychainKind;
 use bdk_wallet::coin_selection;
 use bdk_wallet::coin_selection::InsufficientFunds;
-use bdk_wallet::descriptor::{DescriptorError, IntoWalletDescriptor, calc_checksum};
+use bdk_wallet::descriptor::policy::BuildSatisfaction;
+use bdk_wallet::descriptor::{DescriptorError, ExtractPolicy, IntoWalletDescriptor, calc_checksum};
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::psbt::PsbtUtils;
 use bdk_wallet::signer::{SignOptions, SignerError, SignersContainer};
@@ -1087,8 +1088,16 @@ fn test_create_tx_policy_path_no_csv() {
     };
     insert_tx(&mut wallet, tx);
 
-    let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
-    let root_id = external_policy.id;
+    let external_policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )
+        .unwrap()
+        .unwrap();
+    let root_id = external_policy.id.clone();
     // child #0 is just the key "A"
     let path = vec![(root_id, vec![0])].into_iter().collect();
 
@@ -1098,7 +1107,7 @@ fn test_create_tx_policy_path_no_csv() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
-        .policy_path(path, KeychainKind::External);
+        .set_condition(external_policy.get_condition(&path).unwrap());
     let psbt = builder.finish().unwrap();
 
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
@@ -1108,8 +1117,16 @@ fn test_create_tx_policy_path_no_csv() {
 fn test_create_tx_policy_path_use_csv() {
     let (mut wallet, _) = get_funded_wallet_single(get_test_a_or_b_plus_csv());
 
-    let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
-    let root_id = external_policy.id;
+    let external_policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )
+        .unwrap()
+        .unwrap();
+    let root_id = external_policy.id.clone();
     // child #1 is or(pk(B),older(144))
     let path = vec![(root_id, vec![1])].into_iter().collect();
 
@@ -1119,7 +1136,7 @@ fn test_create_tx_policy_path_use_csv() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
-        .policy_path(path, KeychainKind::External);
+        .set_condition(external_policy.get_condition(&path).unwrap());
     let psbt = builder.finish().unwrap();
 
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(144));
@@ -1131,8 +1148,16 @@ fn test_create_tx_policy_path_ignored_subtree_with_csv() {
         "wsh(or_d(pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu),or_i(and_v(v:pkh(cVpPVruEDdmutPzisEsYvtST1usBR3ntr8pXSyt6D2YYqXRyPcFW),older(30)),and_v(v:pkh(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),older(90)))))",
     );
 
-    let external_policy = wallet.policies(KeychainKind::External).unwrap().unwrap();
-    let root_id = external_policy.id;
+    let external_policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )
+        .unwrap()
+        .unwrap();
+    let root_id = external_policy.id.clone();
     // child #0 is pk(cRjo6jqfVNP33HhSS76UhXETZsGTZYx8FMFvR9kpbtCSV1PmdZdu)
     let path = vec![(root_id, vec![0])].into_iter().collect();
 
@@ -1142,7 +1167,7 @@ fn test_create_tx_policy_path_ignored_subtree_with_csv() {
     let mut builder = wallet.build_tx();
     builder
         .add_recipient(addr.script_pubkey(), Amount::from_sat(30_000))
-        .policy_path(path, KeychainKind::External);
+        .set_condition(external_policy.get_condition(&path).unwrap());
     let psbt = builder.finish().unwrap();
 
     assert_eq!(psbt.unsigned_tx.input[0].sequence, Sequence(0xFFFFFFFD));
@@ -2341,7 +2366,16 @@ fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
     let (mut wallet, _) = get_funded_wallet(get_test_tr_repeated_key(), get_test_tr_single_sig());
     let addr = wallet.reveal_next_address(KeychainKind::External);
 
-    let path = vec![("rn4nre9c".to_string(), vec![0])]
+    let external_policy = wallet
+        .public_descriptor(KeychainKind::External)
+        .extract_policy(
+            &SignersContainer::default(),
+            BuildSatisfaction::None,
+            wallet.secp_ctx(),
+        )
+        .unwrap()
+        .unwrap();
+    let path = vec![(external_policy.id.clone(), vec![0])]
         .into_iter()
         .collect();
 
@@ -2349,7 +2383,7 @@ fn test_taproot_psbt_populate_tap_key_origins_repeated_key() {
     builder
         .drain_to(addr.script_pubkey())
         .drain_wallet()
-        .policy_path(path, KeychainKind::External);
+        .set_condition(external_policy.get_condition(&path).unwrap());
     let psbt = builder.finish().unwrap();
 
     let mut input_key_origins = psbt.inputs[0]
