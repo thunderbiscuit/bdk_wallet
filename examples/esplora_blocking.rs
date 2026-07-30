@@ -1,4 +1,5 @@
 use bdk_esplora::{EsploraExt, esplora_client};
+use bdk_wallet::KeyRing;
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::miniscript::descriptor::KeyMapWrapper;
@@ -40,9 +41,11 @@ fn main() -> Result<(), anyhow::Error> {
         .load_wallet(&mut db)?;
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
-        None => Wallet::create(external_descriptor, internal_descriptor)
-            .network(NETWORK)
-            .create_wallet(&mut db)?,
+        None => Wallet::create(
+            KeyRing::standard(NETWORK, external_descriptor, internal_descriptor)
+                .expect("valid descriptors"),
+        )
+        .create_wallet(&mut db)?,
     };
 
     let address = wallet.next_unused_address(KeychainKind::External);

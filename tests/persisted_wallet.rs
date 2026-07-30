@@ -12,7 +12,8 @@ use bdk_wallet::descriptor::IntoWalletDescriptor;
 use bdk_wallet::error::CreateTxError;
 use bdk_wallet::test_utils::*;
 use bdk_wallet::{
-    ChangeSet, KeychainKind, LoadError, LoadMismatch, LoadWithPersistError, Wallet, WalletPersister,
+    ChangeSet, KeyRing, KeychainKind, LoadError, LoadMismatch, LoadWithPersistError, Wallet,
+    WalletPersister,
 };
 use bitcoin::constants::ChainHash;
 use bitcoin::hashes::Hash;
@@ -102,10 +103,12 @@ fn wallet_is_persisted() -> anyhow::Result<()> {
         // create new wallet
         let wallet_spk_index = {
             let mut db = create_db(&file_path)?;
-            let mut wallet = Wallet::create(external_desc, internal_desc)
-                .network(Network::Testnet)
-                .use_spk_cache(true)
-                .create_wallet(&mut db)?;
+            let mut wallet = Wallet::create(
+                KeyRing::standard(Network::Testnet, external_desc, internal_desc)
+                    .expect("valid descriptors"),
+            )
+            .use_spk_cache(true)
+            .create_wallet(&mut db)?;
 
             wallet.reveal_next_address(KeychainKind::External);
 
@@ -247,9 +250,10 @@ fn wallet_load_checks() -> anyhow::Result<()> {
         let (external_desc, internal_desc) = get_test_tr_single_sig_xprv_and_change_desc();
 
         // create new wallet
-        let _ = Wallet::create(external_desc, internal_desc)
-            .network(network)
-            .create_wallet(&mut create_db(&file_path)?)?;
+        let _ = Wallet::create(
+            KeyRing::standard(network, external_desc, internal_desc).expect("valid descriptors"),
+        )
+        .create_wallet(&mut create_db(&file_path)?)?;
 
         assert_matches!(
             Wallet::load()
@@ -316,10 +320,11 @@ fn wallet_should_persist_anchors_and_recover() {
     let mut db = rusqlite::Connection::open(db_path).unwrap();
 
     let desc = get_test_tr_single_sig_xprv();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Testnet)
-        .create_wallet(&mut db)
-        .unwrap();
+    let mut wallet = Wallet::create(
+        KeyRing::new(Network::Testnet, KeychainKind::External, desc).expect("valid descriptors"),
+    )
+    .create_wallet(&mut db)
+    .unwrap();
     let small_output_tx = Transaction {
         input: vec![],
         output: vec![TxOut {
@@ -374,10 +379,11 @@ fn single_descriptor_wallet_persist_and_recover() {
     let mut db = rusqlite::Connection::open(db_path).unwrap();
 
     let desc = get_test_tr_single_sig_xprv();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Testnet)
-        .create_wallet(&mut db)
-        .unwrap();
+    let mut wallet = Wallet::create(
+        KeyRing::new(Network::Testnet, KeychainKind::External, desc).expect("valid descriptors"),
+    )
+    .create_wallet(&mut db)
+    .unwrap();
     let _ = wallet.reveal_addresses_to(KeychainKind::External, 2);
     assert!(wallet.persist(&mut db).unwrap());
 
@@ -415,10 +421,12 @@ fn two_path_descriptor_wallet_persist_and_recover() {
     let mut db = rusqlite::Connection::open(db_path).unwrap();
 
     let two_path_descriptor = get_test_two_path_wpkh();
-    let mut wallet = Wallet::create_from_two_path_descriptor(two_path_descriptor)
-        .network(Network::Testnet4)
-        .create_wallet(&mut db)
-        .unwrap();
+    let mut wallet = Wallet::create(
+        KeyRing::from_two_path_descriptor(Network::Testnet4, two_path_descriptor)
+            .expect("valid descriptors"),
+    )
+    .create_wallet(&mut db)
+    .unwrap();
     let _ = wallet.reveal_addresses_to(KeychainKind::External, 2);
     assert!(wallet.persist(&mut db).unwrap());
 
@@ -490,9 +498,10 @@ fn test_lock_outpoint_persist() -> anyhow::Result<()> {
     let mut conn = rusqlite::Connection::open_in_memory()?;
 
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Signet)
-        .create_wallet(&mut conn)?;
+    let mut wallet = Wallet::create(
+        KeyRing::standard(Network::Signet, desc, change_desc).expect("valid descriptors"),
+    )
+    .create_wallet(&mut conn)?;
 
     // Receive coins.
     let mut outpoints = vec![];

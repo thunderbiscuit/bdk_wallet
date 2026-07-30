@@ -222,9 +222,9 @@ impl<'a, Cs> TxBuilder<'a, Cs> {
     /// #     "snj:and_v(v:pk(cMnkdebixpXMPfkcNEjjGin7s94hiehAH4mLbYkZoh9KSiNNmqC8),",
     /// #     "after(630000))))",
     /// # );
-    /// # let mut wallet = Wallet::create_single(descriptor)
-    /// #     .network(Network::Regtest)
-    /// #     .create_wallet_no_persist()?;
+    /// # let mut wallet = Wallet::create(KeyRing::new(Network::Regtest, KeychainKind::External, descriptor).expect("valid descriptors"))
+    /// #
+    /// #     .create_wallet_no_persist();
     /// let policy = wallet
     ///     .public_descriptor(KeychainKind::External)
     ///     .extract_policy(
@@ -906,6 +906,7 @@ impl ChangeSpendPolicy {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
+    use crate::KeyRing;
     const ORDERING_TEST_TX: &str = "0200000003c26f3eb7932f7acddc5ddd26602b77e7516079b03090a16e2c2f54\
                                     85d1fd600f0100000000ffffffffc26f3eb7932f7acddc5ddd26602b77e75160\
                                     79b03090a16e2c2f5485d1fd600f0000000000ffffffff571fb3e02278217852\
@@ -1148,10 +1149,15 @@ mod test {
         use bdk_chain::BlockId;
         use bitcoin::{BlockHash, Network, hashes::Hash};
 
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut wallet = Wallet::create(
+            KeyRing::new(
+                Network::Regtest,
+                KeychainKind::External,
+                get_test_tr_single_sig(),
+            )
+            .expect("valid descriptors"),
+        )
+        .create_wallet_no_persist();
         let recipient = wallet.next_unused_address(KeychainKind::External).address;
 
         insert_checkpoint(
@@ -1237,10 +1243,15 @@ mod test {
         use bdk_chain::BlockId;
         use bitcoin::{BlockHash, Network, hashes::Hash};
 
-        let mut wallet = Wallet::create_single(get_test_tr_single_sig())
-            .network(Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut wallet = Wallet::create(
+            KeyRing::new(
+                Network::Regtest,
+                KeychainKind::External,
+                get_test_tr_single_sig(),
+            )
+            .expect("valid descriptors"),
+        )
+        .create_wallet_no_persist();
 
         insert_checkpoint(
             &mut wallet,
@@ -1310,10 +1321,11 @@ mod test {
     fn test_add_utxo_final_outpoint_retained() {
         // Create empty wallet
         let (desc, change_desc) = get_test_wpkh_and_change_desc();
-        let mut wallet = Wallet::create(desc, change_desc)
-            .network(bdk_wallet::bitcoin::Network::Regtest)
-            .create_wallet_no_persist()
-            .unwrap();
+        let mut wallet = Wallet::create(
+            KeyRing::standard(bdk_wallet::bitcoin::Network::Regtest, desc, change_desc)
+                .expect("valid descriptors"),
+        )
+        .create_wallet_no_persist();
 
         let outpoint_0 = receive_output(
             &mut wallet,

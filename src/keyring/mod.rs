@@ -136,6 +136,20 @@ where
         self.keychains.get(keychain)
     }
 
+    /// Convert into the parameters used to create a [`Wallet`](crate::Wallet).
+    ///
+    /// Prefer [`Wallet::create`](crate::Wallet::create), which calls this for you.
+    pub fn into_params(self) -> crate::CreateParams<K> {
+        crate::CreateParams {
+            secp: self.secp,
+            descriptors: self.keychains,
+            network: self.network,
+            genesis_hash: None,
+            lookahead: bdk_chain::keychain_txout::DEFAULT_LOOKAHEAD,
+            use_spk_cache: false,
+        }
+    }
+
     fn validate(
         secp: &SecpCtx,
         network: Network,
@@ -144,6 +158,65 @@ where
         let (descriptor, _keymap) = descriptor.into_wallet_descriptor(secp, network.into())?;
         check_wallet_descriptor(&descriptor)?;
         Ok(descriptor)
+    }
+}
+
+impl KeyRing<crate::KeychainKind> {
+    /// A conventional two-keychain wallet: `external` for receiving, `internal` for change.
+    ///
+    /// Equivalent to [`KeyRing::new`] with [`External`](crate::KeychainKind::External) followed by
+    /// [`add_descriptor`](KeyRing::add_descriptor) with
+    /// [`Internal`](crate::KeychainKind::Internal).
+    pub fn standard(
+        network: Network,
+        external: impl IntoWalletDescriptor,
+        internal: impl IntoWalletDescriptor,
+    ) -> Result<Self, KeyRingError<crate::KeychainKind>> {
+        let mut keyring = Self::new(network, crate::KeychainKind::External, external)?;
+        keyring.add_descriptor(crate::KeychainKind::Internal, internal)?;
+        Ok(keyring)
+    }
+
+    /// A conventional two-keychain wallet described by a single *multipath* descriptor.
+    ///
+    /// The descriptor must have exactly two paths: path `0` becomes
+    /// [`External`](crate::KeychainKind::External) and path `1` becomes
+    /// [`Internal`](crate::KeychainKind::Internal).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DescriptorError::MultiPath`] if the descriptor is not multipath, or if it has a
+    /// number of paths other than two.
+    ///
+    /// [`DescriptorError::MultiPath`]: crate::descriptor::DescriptorError::MultiPath
+    pub fn from_two_path_descriptor(
+        network: Network,
+        two_path_descriptor: impl IntoWalletDescriptor,
+    ) -> Result<Self, KeyRingError<crate::KeychainKind>> {
+        use crate::descriptor::DescriptorError;
+
+        let secp = Secp256k1::new();
+        let (descriptor, _keymap) = two_path_descriptor
+            .into_wallet_descriptor(&secp, network.into())
+            .map_err(KeyRingError::Descriptor)?;
+
+        if !descriptor.is_multipath() {
+            return Err(KeyRingError::Descriptor(DescriptorError::MultiPath));
+        }
+        let descriptors = descriptor
+            .into_single_descriptors()
+            .map_err(|e| KeyRingError::Descriptor(DescriptorError::Miniscript(e)))?;
+        if descriptors.len() != 2 {
+            return Err(KeyRingError::Descriptor(DescriptorError::MultiPath));
+        }
+
+        let mut keyring = Self::new(
+            network,
+            crate::KeychainKind::External,
+            descriptors[0].clone(),
+        )?;
+        keyring.add_descriptor(crate::KeychainKind::Internal, descriptors[1].clone())?;
+        Ok(keyring)
     }
 }
 
