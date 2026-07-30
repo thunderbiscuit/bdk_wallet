@@ -19,9 +19,11 @@ fn main() -> anyhow::Result<()> {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
 
     // Create wallet and "fund" it with a single UTXO.
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(NETWORK)
-        .create_wallet_no_persist()?;
+    let mut wallet = Wallet::create(NETWORK)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
+        .create_wallet_no_persist()
+        .expect("valid descriptors");
 
     fund_wallet(&mut wallet)?;
 
@@ -156,7 +158,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn fund_wallet(wallet: &mut Wallet) -> anyhow::Result<()> {
+fn fund_wallet(wallet: &mut Wallet<KeychainKind>) -> anyhow::Result<()> {
     let anchor_block = BlockId {
         height: 1,
         hash: "3bcc1c447c6b3886f43e416b5c21cf5c139dc4829a71dc78609bc8f6235611c5".parse()?,

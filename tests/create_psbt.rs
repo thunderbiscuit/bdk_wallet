@@ -18,10 +18,11 @@ use miniscript::plan::Assets;
 #[test]
 fn test_create_psbt() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
     let expected_xpub = match wallet.public_descriptor(KeychainKind::External) {
         miniscript::Descriptor::Tr(tr) => match tr.internal_key() {
             miniscript::DescriptorPublicKey::XPub(desc) => desc.xkey,
@@ -106,10 +107,11 @@ fn test_create_psbt() {
 #[test]
 fn test_create_psbt_insufficient_funds_error() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let addr = wallet.reveal_next_address(KeychainKind::External);
 
@@ -128,10 +130,11 @@ fn test_create_psbt_insufficient_funds_error() {
 #[test]
 fn test_create_psbt_maturity_height() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
     let receive_address = wallet.reveal_next_address(KeychainKind::External);
     let send_to_address = wallet.reveal_next_address(KeychainKind::External).address;
 
@@ -191,10 +194,10 @@ fn test_create_psbt_cltv() {
     use absolute::LockTime;
 
     let desc = get_test_single_sig_cltv();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     // Receive coins
     let anchor = ConfirmationBlockTime {
@@ -268,10 +271,10 @@ fn test_create_psbt_cltv_timestamp() {
 
     let lock_time = LockTime::from_consensus(1734230218);
     let desc = get_test_single_sig_cltv_timestamp();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     // Receive coins
     let op = receive_output(&mut wallet, Amount::ONE_BTC, ReceiveTo::Mempool(1));
@@ -324,10 +327,10 @@ fn test_create_psbt_csv() {
     use bitcoin::relative;
 
     let desc = get_test_single_sig_csv();
-    let mut wallet = Wallet::create_single(desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     // Receive coins
     let anchor = ConfirmationBlockTime {
@@ -408,10 +411,10 @@ fn test_create_psbt_fallback_sequence_applied_to_coin_selected_input() {
 #[test]
 fn test_create_psbt_fallback_sequence_skipped_for_csv_input() {
     use bitcoin::relative;
-    let mut wallet = Wallet::create_single(get_test_single_sig_csv())
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, get_test_single_sig_csv())
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
             height: 10_000,
@@ -476,10 +479,10 @@ fn test_create_psbt_sequence_override_takes_precedence_over_fallback() {
 #[test]
 fn test_create_psbt_sequence_override_csv_conflict_returns_error() {
     use bitcoin::relative;
-    let mut wallet = Wallet::create_single(get_test_single_sig_csv())
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, get_test_single_sig_csv())
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
             height: 10_000,
@@ -521,10 +524,11 @@ fn test_replace_by_fee_replaces_descendant_fees() {
     use KeychainKind::*;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let block_id = BlockId {
         height: 100,
@@ -645,10 +649,11 @@ fn test_replace_by_fee_confirmed_tx_error() {
     use bdk_wallet::error::ReplaceByFeeError;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let block = BlockId {
         height: 100,
@@ -708,10 +713,11 @@ fn test_replace_by_fee_no_inputs_from_original() {
     use bdk_wallet::error::ReplaceByFeeError;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let addr = wallet.reveal_next_address(External).address;
 
@@ -762,10 +768,11 @@ fn test_replace_by_fee_no_original_transactions() {
     use bdk_wallet::error::ReplaceByFeeError;
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     // replace_txs with an empty iterator produces PsbtParams<ReplaceTx> with an empty replace set.
     let params = PsbtParams::default().replace_txs(core::iter::empty::<Transaction>());
@@ -785,10 +792,11 @@ fn test_replace_by_fee_conflicting_input_descendant() {
     use bitcoin::{Sequence, psbt as btc_psbt};
 
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let addr = wallet.reveal_next_address(KeychainKind::External).address;
 
@@ -872,10 +880,11 @@ fn test_replace_by_fee_conflicting_input_descendant() {
 #[test]
 fn test_create_psbt_utxo_filter() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
@@ -969,10 +978,11 @@ fn test_create_psbt_no_recipients_error() {
 #[test]
 fn test_create_psbt_drain_wallet_change_below_dust_error() {
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
@@ -1013,10 +1023,11 @@ fn test_replace_by_fee_drain_wallet_change_below_dust_error() {
     use bitcoin::transaction;
 
     let (desc, change_desc) = get_test_tr_single_sig_xprv_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let anchor = ConfirmationBlockTime {
         block_id: BlockId {
@@ -1072,10 +1083,11 @@ fn test_replace_by_fee_drain_wallet_change_below_dust_error() {
 #[test]
 fn test_replace_tx_with_planned_input() {
     let (desc, change_desc) = get_test_wpkh_and_change_desc();
-    let mut wallet = Wallet::create(desc, change_desc)
-        .network(Network::Regtest)
+    let mut wallet = Wallet::create(Network::Regtest)
+        .descriptor(KeychainKind::External, desc)
+        .descriptor(KeychainKind::Internal, change_desc)
         .create_wallet_no_persist()
-        .unwrap();
+        .expect("valid descriptors");
 
     let addr = wallet.reveal_next_address(KeychainKind::External).address;
 
