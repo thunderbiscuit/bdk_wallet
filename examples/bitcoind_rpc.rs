@@ -2,6 +2,7 @@ use bdk_bitcoind_rpc::{
     Emitter, MempoolEvent,
     bitcoincore_rpc::{Auth, Client, RpcApi},
 };
+use bdk_wallet::KeyRing;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     KeychainKind, Wallet,
@@ -102,12 +103,20 @@ fn main() -> anyhow::Result<()> {
     let mut wallet = match wallet_opt {
         Some(wallet) => wallet,
         None => match &args.change_descriptor {
-            Some(change_desc) => Wallet::create(args.descriptor.clone(), change_desc.clone())
-                .network(args.network)
-                .create_wallet(&mut db)?,
-            None => Wallet::create_single(args.descriptor.clone())
-                .network(args.network)
-                .create_wallet(&mut db)?,
+            Some(change_desc) => Wallet::create(
+                KeyRing::standard(args.network, args.descriptor.clone(), change_desc.clone())
+                    .expect("valid descriptors"),
+            )
+            .create_wallet(&mut db)?,
+            None => Wallet::create(
+                KeyRing::new(
+                    args.network,
+                    KeychainKind::External,
+                    args.descriptor.clone(),
+                )
+                .expect("valid descriptors"),
+            )
+            .create_wallet(&mut db)?,
         },
     };
     println!(

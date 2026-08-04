@@ -14,7 +14,7 @@ use bitcoin::{
 };
 use miniscript::{Descriptor, DescriptorPublicKey};
 
-use crate::{AsyncWalletPersister, ChangeSet, WalletPersister, locked_outpoints};
+use crate::{AsyncWalletPersister, ChangeSet, KeychainKind, WalletPersister, locked_outpoints};
 
 macro_rules! block_id {
     ($height:expr, $hash:literal) => {{
@@ -113,8 +113,11 @@ where
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
 
     let changeset1 = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
+        descriptors: [
+            (KeychainKind::External, descriptor.clone()),
+            (KeychainKind::Internal, change_descriptor.clone()),
+        ]
+        .into(),
         network: Some(Network::Testnet),
         ..ChangeSet::default()
     };
@@ -137,8 +140,11 @@ where
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[3].parse().unwrap();
 
     let changeset2 = ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
+        descriptors: [
+            (KeychainKind::External, descriptor.clone()),
+            (KeychainKind::Internal, change_descriptor.clone()),
+        ]
+        .into(),
         network: Some(Network::Testnet),
         ..ChangeSet::default()
     };
@@ -266,7 +272,7 @@ fn network_changeset() -> ChangeSet {
 fn descriptor_changeset() -> ChangeSet {
     let descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[0].parse().unwrap();
     ChangeSet {
-        descriptor: Some(descriptor),
+        descriptors: [(KeychainKind::External, descriptor)].into(),
         ..Default::default()
     }
 }
@@ -274,7 +280,7 @@ fn descriptor_changeset() -> ChangeSet {
 fn change_descriptor_changeset() -> ChangeSet {
     let change_descriptor: Descriptor<DescriptorPublicKey> = DESCRIPTORS[1].parse().unwrap();
     ChangeSet {
-        change_descriptor: Some(change_descriptor),
+        descriptors: [(KeychainKind::Internal, change_descriptor)].into(),
         ..Default::default()
     }
 }
@@ -351,8 +357,11 @@ fn get_changeset(tx1: Transaction) -> ChangeSet {
     };
 
     ChangeSet {
-        descriptor: Some(descriptor.clone()),
-        change_descriptor: Some(change_descriptor.clone()),
+        descriptors: [
+            (KeychainKind::External, descriptor.clone()),
+            (KeychainKind::Internal, change_descriptor.clone()),
+        ]
+        .into(),
         network: Some(Network::Testnet),
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,
@@ -411,8 +420,7 @@ fn get_changeset_two(tx2: Transaction) -> ChangeSet {
     };
 
     ChangeSet {
-        descriptor: None,
-        change_descriptor: None,
+        descriptors: Default::default(),
         network: None,
         local_chain: local_chain_changeset,
         tx_graph: tx_graph_changeset,

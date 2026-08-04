@@ -33,11 +33,14 @@
 //!
 //! let import = FullyNodedExport::from_str(import)?;
 //! let wallet = Wallet::create(
-//!     import.descriptor(),
-//!     import.change_descriptor().expect("change descriptor"),
+//!     KeyRing::standard(
+//!         Network::Testnet,
+//!         import.descriptor(),
+//!         import.change_descriptor().expect("change descriptor"),
+//!     )
+//!     .expect("valid descriptors"),
 //! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
+//! .create_wallet_no_persist();
 //! # Ok::<_, Box<dyn core::error::Error>>(())
 //! ```
 //!
@@ -48,9 +51,8 @@
 //! # use bdk_wallet::*;
 //! const EXTERNAL: &str = "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/0/*)";
 //! const INTERNAL: &str = "wpkh([c258d2e4/84h/1h/0h]tpubDD3ynpHgJQW8VvWRzQ5WFDCrs4jqVFGHB3vLC3r49XHJSqP8bHKdK4AriuUKLccK68zfzowx7YhmDN8SiSkgCDENUFx9qVw65YyqM78vyVe/1/*)";
-//! let wallet = Wallet::create(EXTERNAL, INTERNAL)
-//!     .network(Network::Testnet)
-//!     .create_wallet_no_persist()?;
+//! let wallet = Wallet::create(KeyRing::standard(Network::Testnet, EXTERNAL, INTERNAL).expect("valid descriptors"))
+//!     .create_wallet_no_persist();
 //! // Keys are caller-owned: supply the keymaps explicitly.
 //! let secp = wallet.secp_ctx();
 //! let (_, external_keymap) = miniscript::Descriptor::parse_descriptor(secp, EXTERNAL)?;
@@ -73,12 +75,11 @@
 //! # use bitcoin::*;
 //! # use bdk_wallet::export::*;
 //! # use bdk_wallet::*;
-//! let wallet = Wallet::create(
+//! let wallet = Wallet::create(KeyRing::standard(Network::Testnet,
 //!     "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/0/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/0/*))",
 //!     "wsh(sortedmulti(2,[73756c7f/48h/0h/0h/2h]tpubDCKxNyM3bLgbEX13Mcd8mYxbVg9ajDkWXMh29hMWBurKfVmBfWAM96QVP3zaUcN51HvkZ3ar4VwP82kC8JZhhux8vFQoJintSpVBwpFvyU3/1/*,[f9f62194/48h/0h/0h/2h]tpubDDp3ZSH1yCwusRppH7zgSxq2t1VEUyXSeEp8E5aFS8m43MknUjiF1bSLo3CGWAxbDyhF1XowA5ukPzyJZjznYk3kYi6oe7QxtX2euvKWsk4/1/*))",
-//! )
-//! .network(Network::Testnet)
-//! .create_wallet_no_persist()?;
+//! ).expect("valid descriptors"))
+//! .create_wallet_no_persist();
 //! let export = CaravanExport::export_wallet(&wallet, "My Multisig Wallet").unwrap();
 //!
 //! println!("Exported: {}", export.to_string());
@@ -716,6 +717,7 @@ impl CaravanExport {
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[cfg(test)]
 mod test {
+    use crate::KeyRing;
     use alloc::string::ToString;
     use bitcoin::Amount;
     use core::str::FromStr;
@@ -728,10 +730,15 @@ mod test {
     use crate::test_utils::*;
 
     fn get_test_wallet(descriptor: &str, change_descriptor: &str, network: Network) -> Wallet {
-        let mut wallet = Wallet::create(descriptor.to_string(), change_descriptor.to_string())
-            .network(network)
-            .create_wallet_no_persist()
-            .expect("must create wallet");
+        let mut wallet = Wallet::create(
+            KeyRing::standard(
+                network,
+                descriptor.to_string(),
+                change_descriptor.to_string(),
+            )
+            .expect("valid descriptors"),
+        )
+        .create_wallet_no_persist();
         let block = BlockId {
             height: 5000,
             hash: BlockHash::all_zeros(),
@@ -1062,17 +1069,14 @@ mod test {
         let (external_desc, internal_desc) = import.to_descriptors().unwrap();
 
         // Verify the descriptors can create a functional BDK Wallet
-        let wallet_result = Wallet::create(external_desc, internal_desc)
-            .network(bitcoin::Network::Testnet)
-            .create_wallet_no_persist();
-
+        let keyring = KeyRing::standard(bitcoin::Network::Testnet, external_desc, internal_desc);
         assert!(
-            wallet_result.is_ok(),
-            "Failed to create wallet from Caravan export descriptors: {:?}",
-            wallet_result.err()
+            keyring.is_ok(),
+            "Failed to build keyring from Caravan export descriptors: {:?}",
+            keyring.err()
         );
 
-        let mut wallet = wallet_result.unwrap();
+        let mut wallet = Wallet::create(keyring.unwrap()).create_wallet_no_persist();
 
         // Verify basic wallet functionality
         assert_eq!(wallet.network(), bitcoin::Network::Testnet);

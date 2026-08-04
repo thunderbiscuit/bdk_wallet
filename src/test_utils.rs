@@ -10,7 +10,7 @@ use bitcoin::{
     absolute, hashes::Hash, transaction,
 };
 
-use crate::{KeychainKind, Update, Wallet};
+use crate::{KeyRing, KeychainKind, Update, Wallet};
 
 /// Return a fake wallet that appears to be funded for testing.
 ///
@@ -51,16 +51,22 @@ pub fn new_wallet_and_funding_update(
     descriptor: &str,
     change_descriptor: Option<&str>,
 ) -> (Wallet, Txid, Update) {
-    let params = if let Some(change_desc) = change_descriptor {
-        Wallet::create(descriptor.to_string(), change_desc.to_string())
+    let keyring = if let Some(change_desc) = change_descriptor {
+        KeyRing::standard(
+            Network::Regtest,
+            descriptor.to_string(),
+            change_desc.to_string(),
+        )
     } else {
-        Wallet::create_single(descriptor.to_string())
-    };
+        KeyRing::new(
+            Network::Regtest,
+            KeychainKind::External,
+            descriptor.to_string(),
+        )
+    }
+    .expect("descriptors must be valid");
 
-    let wallet = params
-        .network(Network::Regtest)
-        .create_wallet_no_persist()
-        .expect("descriptors must be valid");
+    let wallet = Wallet::create(keyring).create_wallet_no_persist();
 
     let receive_address = wallet.peek_address(KeychainKind::External, 0).address;
     let sendto_address = Address::from_str("bcrt1q3qtze4ys45tgdvguj66zrk4fu6hq3a3v9pfly5")
