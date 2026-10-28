@@ -1622,8 +1622,7 @@ impl Wallet {
     ///
     /// ## Example
     ///
-    /// ```no_run
-    /// # // TODO: remove norun -- bumping fee seems to need the tx in the wallet database first.
+    /// ```
     /// # use std::str::FromStr;
     /// # use bitcoin::*;
     /// # use bdk_wallet::*;
@@ -1647,6 +1646,7 @@ impl Wallet {
     /// psbt.sign(&signer, wallet.secp_ctx()).map_err(|(_, e)| Error::msg(format!("{e:?}")))?;
     /// wallet.finalize_psbt(&mut psbt, SignOptions::default())?;
     /// let tx = psbt.clone().extract_tx().expect("tx");
+    /// # bdk_wallet::test_utils::insert_tx(&mut wallet, tx.clone());
     /// // broadcast tx but it's taking too long to confirm so we want to bump the fee
     /// let mut psbt =  {
     ///     let mut builder = wallet.build_fee_bump(tx.compute_txid())?;
